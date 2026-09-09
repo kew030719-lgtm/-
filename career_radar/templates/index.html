@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CareerRadar · 简历驱动求职 Agent</title>
+  <meta name="description" content="从简历证据到真实岗位排名的本地求职分析台">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="CareerRadar 首页">
+      <span class="brand-mark" aria-hidden="true">CR</span>
+      <span>CareerRadar</span>
+    </a>
+    <div class="system-state" hx-get="/fragments/health" hx-trigger="load, every 30s" hx-swap="innerHTML"><span class="pulse"></span> 正在检查本地服务…</div>
+  </header>
+
+  <main class="shell">
+    <aside class="rail" aria-label="工作流程">
+      <p class="eyebrow">WORKFLOW</p>
+      <ol class="steps" id="steps">
+        <li class="active" data-step="1"><span>01</span><div><b>提交简历</b><small>PDF · DOCX · 文本</small></div></li>
+        <li data-step="2"><span>02</span><div><b>确认方向</b><small>画像 · 城市 · 薪资</small></div></li>
+        <li data-step="3"><span>03</span><div><b>发现岗位</b><small>BOSS 公开页面</small></div></li>
+        <li data-step="4"><span>04</span><div><b>岗位排名</b><small>固定权重评分</small></div></li>
+        <li data-step="5"><span>05</span><div><b>准备计划</b><small>能力缺口 · 7 天</small></div></li>
+      </ol>
+      <div class="privacy-note">
+        <b>隐私边界</b>
+        <p>确认画像后不保存简历完整原文，只保留结构化资料和证据片段。</p>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div class="hero-copy">
+        <p class="eyebrow">RESUME → ROLE → EVIDENCE</p>
+        <h1>让每一次岗位判断<br><em>都有原文依据。</em></h1>
+        <p>提交简历后，Agent 推荐方向；你确认目标，再由自研采集器发现职位并生成可解释排名。</p>
+      </div>
+
+      <section class="panel active" id="panel-1" aria-labelledby="upload-title">
+        <div class="panel-heading"><span>01</span><div><h2 id="upload-title">提交你的简历</h2><p>支持 10 MB 以内的 PDF、DOCX，或直接粘贴文本。</p></div></div>
+        <form id="resume-form" class="upload-grid">
+          <label class="dropzone" for="resume-file">
+            <input id="resume-file" name="file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            <span class="upload-icon">↥</span>
+            <b>选择简历文件</b>
+            <small>点击选择 PDF 或 DOCX</small>
+          </label>
+          <div class="or"><span>或</span></div>
+          <label class="text-box">
+            <span>粘贴简历文本</span>
+            <textarea id="resume-text" name="text" rows="11" placeholder="教育经历、技术栈、项目经历、工作经历……"></textarea>
+          </label>
+          <button class="primary" type="submit">开始分析 <span>→</span></button>
+        </form>
+      </section>
+
+      <section class="panel" id="panel-2" aria-labelledby="confirm-title">
+        <div class="panel-heading"><span>02</span><div><h2 id="confirm-title">确认岗位方向</h2><p>最多选择 2 个方向和 2 个城市，岗位名和关键词都能修改。</p></div></div>
+        <div class="profile-strip" id="profile-strip"></div>
+        <form id="confirm-form">
+          <div id="role-cards" class="role-cards"></div>
+          <div class="preference-grid">
+            <fieldset><legend>目标城市 <small>最多 2 个</small></legend><div class="chips" id="city-options">
+              {% for city in cities %}<label><input type="checkbox" name="cities" value="{{ city }}"><span>{{ city }}</span></label>{% endfor %}
+            </div></fieldset>
+            <label><span>期望薪资</span><input id="salary" placeholder="例如 20–30K，可留空"></label>
+            <label><span>工作年限</span><input id="years" type="number" min="0" max="50" step="0.5" placeholder="无法识别时可补充"></label>
+          </div>
+          <button class="primary" type="submit">确认并搜索岗位 <span>→</span></button>
+        </form>
+      </section>
+
+      <section class="panel" id="panel-3" aria-labelledby="crawl-title">
+        <div class="panel-heading"><span>03</span><div><h2 id="crawl-title">发现真实岗位</h2><p>单并发抓取公开搜索页；遇到验证或登录会停下等待手动输入。</p></div></div>
+        <div class="radar-wrap">
+          <div class="radar" aria-hidden="true"><i></i><b></b></div>
+          <div class="progress-copy"><strong id="progress-value">0%</strong><h3 id="progress-message">任务排队中</h3><p id="progress-meta">正在准备检索组合…</p></div>
+        </div>
+        <div class="progress-track"><i id="progress-bar"></i></div>
+        <button class="secondary hidden retry-button" id="retry-task" type="button">重试当前任务</button>
+        <form id="manual-form" class="manual-box hidden">
+          <h3>页面需要登录或人工确认</h3><p id="manual-reason"></p>
+          <div class="login-box">
+            <div><b>使用你的 BOSS 登录会话</b><small>CareerRadar 显示 BOSS 官方登录页，扫码登录；会话只保存在当前服务内存。</small></div>
+            <div class="login-actions">
+              <button class="secondary" id="open-boss-login" type="button">加载 BOSS 登录页面</button>
+              <button class="primary compact hidden" id="confirm-boss-login" type="button">我已完成登录，继续抓取</button>
+            </div>
+            <div class="login-preview hidden" id="login-preview"><img id="boss-login-preview" alt="BOSS 官方登录页面预览"></div>
+            <p id="login-status" class="login-status">尚未连接登录会话</p>
+          </div>
+          <div class="manual-divider"><span>仍无法访问时，粘贴岗位描述</span></div>
+          <input id="manual-url" type="url" placeholder="https://www.zhipin.com/job_detail/…" required>
+          <textarea id="manual-content" rows="7" placeholder="粘贴职位名称、公司、薪资、职责和技能要求…" required></textarea>
+          <button class="secondary" type="submit">保存岗位描述并继续</button>
+        </form>
+      </section>
+
+      <section class="panel" id="panel-4" aria-labelledby="rank-title">
+        <div class="panel-heading"><span>04</span><div><h2 id="rank-title">岗位适配排名</h2><p>评分由后端固定公式计算；“无法判断”不会被记为零分。</p></div></div>
+        <div class="score-legend"><span>技能 40%</span><span>项目 25%</span><span>经验 15%</span><span>学历 5%</span><span>偏好 15%</span></div>
+        <div id="ranking-list" class="ranking-list"></div>
+        <button class="primary next-plan" id="view-plan" type="button">查看 7 天准备计划 <span>→</span></button>
+      </section>
+
+      <section class="panel" id="panel-5" aria-labelledby="plan-title">
+        <div class="panel-heading"><span>05</span><div><h2 id="plan-title">7 天准备计划</h2><p>围绕排名前三岗位的共同缺口安排，每天都有清晰交付物。</p></div></div>
+        <ol id="plan-list" class="plan-list"></ol>
+        <button class="ghost" id="restart" type="button">分析另一份简历</button>
+      </section>
+
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </section>
+  </main>
+</body>
+</html>

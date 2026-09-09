@@ -1,0 +1,8 @@
+CareerRadar product code is original work built for this repository.
+
+It integrates with Hermes Agent by Nous Research (MIT License):
+https://github.com/NousResearch/hermes-agent
+
+Playwright is used only as a browser driver. CareerRadar implements its own
+crawl scheduling, transport fallback, parsing, deduplication, and persistence.
+

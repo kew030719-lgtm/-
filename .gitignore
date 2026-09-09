@@ -1,0 +1,8 @@
+.env
+.venv/
+.deps/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+data/
+playwright-report/

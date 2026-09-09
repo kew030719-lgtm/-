@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "careerradar.analysis",
+  "version": "0.1.0",
+  "description": "Evidence-backed resume and job analysis tools for CareerRadar.",
+  "author": {"name": "CareerRadar Contributors"},
+  "license": "MIT",
+  "keywords": ["career", "resume", "jobs", "evidence"]
+}
