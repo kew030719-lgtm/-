@@ -6,6 +6,8 @@ structure we imagined.
 """
 
 from pathlib import Path
+import re
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -125,6 +127,30 @@ def test_job51_search_reads_the_metadata_attribute():
     assert all(link.startswith("https://jobs.51job.com/") for link in links)
     assert all(link.endswith(".html") for link in links)
     assert links[0].split("/")[-1].split(".")[0].isdigit()
+
+
+def test_job51_detail_rule_matches_pathnames_including_district_slugs():
+    assert re.fullmatch(JOB51.job_path_pattern, "/guangzhou/173657951.html")
+    assert re.fullmatch(JOB51.job_path_pattern, "/guangzhou-thq/173657296.html")
+    assert not re.fullmatch(JOB51.job_path_pattern, "/pc/search")
+
+
+def test_job51_real_card_shape_can_queue_twenty_distinct_results():
+    """A rendered result page exposes each posting through sensorsdata."""
+    import json
+
+    cards = []
+    for index in range(20):
+        metadata = json.dumps({
+            "jobId": str(173650000 + index),
+            "jobTitle": f"数据工程师 {index}",
+            "jobArea": "广州·天河区" if index % 2 else "广州",
+        }, ensure_ascii=False)
+        cards.append(f"<div class='joblist-item-job' sensorsdata='{metadata}'></div>")
+    links = JOB51.parse_search_page("<main>" + "".join(cards) + "</main>")
+    assert len(links) == 20
+    assert len(set(links)) == 20
+    assert all(re.fullmatch(JOB51.job_path_pattern, urlsplit(link).path) for link in links)
 
 
 def test_job51_detail_page_without_a_description_raises_rather_than_inventing_one():

@@ -40,7 +40,7 @@ def site_allow_map(site_keys: list[str]) -> dict[str, dict[str, object]]:
     """What the Chrome helper is allowed to navigate to, per site.
 
     Shipped to the extension rather than hardcoded there, so adding a job board
-    needs no extension change.
+    needs no extension change. ``path_pattern`` always matches URL.pathname.
     """
     return {
         key: {

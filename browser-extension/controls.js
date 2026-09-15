@@ -4,6 +4,13 @@ async function command(action,extra={}){
   if(result.endpoint)$('#endpoint').value=result.endpoint;
   $('#status').textContent=result.error||result.message||'等待 CareerRadar 创建任务';
   $('#status').classList.toggle('error',!result.connected&&Boolean(result.error));
+  const metrics=$('#metrics');
+  if(result.metrics){
+    const seconds=Math.floor(result.metrics.elapsed_ms/1000);
+    const duration=seconds<60?`${seconds} 秒`:`${Math.floor(seconds/60)} 分 ${seconds%60} 秒`;
+    metrics.textContent=`已采集 ${result.metrics.count} 条 · 已运行 ${duration} · 最近 1 分钟 ${result.metrics.per_minute} 条`;
+    metrics.hidden=false;
+  }else metrics.hidden=true;
 }
 for(const action of ['enable','resume','cancel']){
   $(`#${action}`).addEventListener('click',()=>command(action));

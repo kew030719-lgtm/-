@@ -2,6 +2,11 @@
 importScripts('queue.js');
 const defaultEndpoint='http://127.0.0.1:8000';
 let busy=false;
+let wakeTimer=null;
+function scheduleTick(when=Date.now()){
+  if(wakeTimer!==null)clearTimeout(wakeTimer);
+  wakeTimer=setTimeout(()=>{wakeTimer=null;tick();},Math.max(0,when-Date.now()));
+}
 function normalizeEndpoint(value){
   let url;
   try{url=new URL(String(value||defaultEndpoint).trim());}catch{throw new Error('主程序地址格式无效');}
@@ -36,7 +41,13 @@ async function pendingTask(){
 }
 async function api(path,body){
   const endpoint=await getEndpoint();
-  const response=await fetch(endpoint+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+  let response;
+  try{
+    response=await fetch(endpoint+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+  }catch(cause){
+    const error=new Error('主程序暂时无法连接，助手会自动重试');
+    error.transient=true;error.cause=cause;throw error;
+  }
   const data=await response.json().catch(()=>({}));
   if(!response.ok){const error=new Error(data.detail||`本地服务请求失败（${response.status}）`);error.status=response.status;throw error;}
   return data;
@@ -112,12 +123,15 @@ async function ensureHost(url){
 chrome.runtime.onInstalled.addListener(()=>arm());
 chrome.runtime.onStartup.addListener(()=>arm());
 chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name==='career-radar')tick();});
+chrome.tabs.onUpdated.addListener((tabId,changeInfo)=>{
+  if(changeInfo.status==='complete')return tick(tabId);
+});
 function readPage(){
   const root=document.documentElement.cloneNode(true);
   root.querySelectorAll('script:not([type="application/ld+json"]),input,textarea,iframe,noscript').forEach(node=>node.remove());
   return {url:location.href,html:root.outerHTML.slice(0,2000000),text:document.body?.innerText||''};
 }
-async function tick(){
+async function tick(completedTabId){
   if(busy)return;
   busy=true;
   let job;
@@ -125,6 +139,7 @@ async function tick(){
     const stored=await chrome.storage.local.get(['enabled','job']);
     if(!stored.enabled)return;
     job=stored.job;
+    if(completedTabId!==undefined&&(!job||job.done||job.phase!=='read'||completedTabId!==job.tabId))return;
     const preferred=await preferredTaskId();
     if(job&&!job.done&&preferred&&preferred!==job.task_id){
       try{
@@ -138,7 +153,7 @@ async function tick(){
     if(!job||job.done){
       const pending=await pendingTask();
       if(!pending.task_id)return;
-      job={...await api(`/api/browser-runs/${pending.task_id}/start`,{}),seen:[],count:0,phase:'navigate',message:'正在开始自动搜索'};
+      job={...await api(`/api/browser-runs/${pending.task_id}/start`,{}),seen:[],count:0,phase:'navigate',message:'正在开始自动搜索',runStartedAt:Date.now(),captureTimes:[]};
       await save(job);
     }
     let task;
@@ -147,13 +162,15 @@ async function tick(){
       await chrome.storage.local.remove('job');job=null;
       const pending=await pendingTask();
       if(!pending.task_id)return;
-      job={...await api(`/api/browser-runs/${pending.task_id}/start`,{}),seen:[],count:0,phase:'navigate',message:'旧任务已失效，已连接当前主程序'};
+      job={...await api(`/api/browser-runs/${pending.task_id}/start`,{}),seen:[],count:0,phase:'navigate',message:'旧任务已失效，已连接当前主程序',runStartedAt:Date.now(),captureTimes:[]};
       await save(job);task=await api(`/api/tasks/${job.task_id}`);
     }
     if(['FAILED','FAILED_VALIDATION','SUCCEEDED'].includes(task.status)){
       job.done=true;job.message=task.message;await save(job);return;
     }
     if(job.paused)return;
+    job.runStartedAt=job.runStartedAt||job.startedAt||Date.now();
+    job.captureTimes=Array.isArray(job.captureTimes)?job.captureTimes:[];
     // A job persisted before the extension learned the per-site allow rules has
     // no `allow`. Re-acquire it whenever the backend will still serve /start, and
     // otherwise say so plainly — every navigation would fail otherwise, one
@@ -191,11 +208,15 @@ async function tick(){
       const tab=job.tabId?await chrome.tabs.update(job.tabId,{url:item.url}):await chrome.tabs.create({url:item.url,active:true});
       job.tabId=tab.id;job.phase='read';job.startedAt=Date.now();job.nextAt=Date.now()+job.interval_ms;
       await progress(job,'RUNNING',`${item.kind==='search'?'搜索':'读取岗位'} · ${item.city} · 已采集 ${job.count} 个`);
+      // Usually the tab-complete event wakes us first. This short timer covers
+      // pages that completed before onUpdated was delivered.
+      scheduleTick(Date.now()+500);
       return;
     }
     const tab=await chrome.tabs.get(job.tabId);
     if(tab.status!=='complete'){
       if(Date.now()-job.startedAt>60000)throw new Error('页面加载超时，请检查专用采集标签页后继续');
+      scheduleTick(Date.now()+500);
       return;
     }
     if(!CareerQueue.allowed(job,tab.url))throw new Error('采集页跳转到其他域名，已暂停');
@@ -209,10 +230,15 @@ async function tick(){
     }else{
       const result=await api('/api/browser-captures',body);
       job.count=result.count;job.queue.shift();
+      job.captureTimes.push(Date.now());
+      job.captureTimes=job.captureTimes.filter(value=>value>=Date.now()-60000);
     }
-    job.phase='navigate';await save(job);
+    job.phase='navigate';await save(job);scheduleTick(job.nextAt);
   }catch(error){
     if(job){
+      if(error.transient){
+        job.message=error.message;await save(job);scheduleTick(Date.now()+30000);return;
+      }
       job.paused=true;job.message=`已暂停：${error.message}`;await save(job);
       try{await progress(job,'NEEDS_MANUAL_INPUT',job.message);}catch{/* service may be offline */}
     }
@@ -257,8 +283,14 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
     const endpoint=normalizeEndpoint(latest.endpoint||defaultEndpoint);
     try{
       const health=await api('/health');
-      reply({endpoint,connected:true,message:latest.job?.message||(latest.enabled?`已连接 ${endpoint}；等待任务（最多 30 秒）`:`已连接 ${endpoint} · ${health.model||'CareerRadar'}；请启用自动接单`)});
+      const metrics=latest.job?jobMetrics(latest.job):null;
+      reply({endpoint,connected:true,metrics,message:latest.job?.message||(latest.enabled?`已连接 ${endpoint}；等待任务（最多 30 秒）`:`已连接 ${endpoint} · ${health.model||'CareerRadar'}；请启用自动接单`)});
     }catch(error){reply({endpoint,connected:false,error:`无法连接 ${endpoint}：${error.message}`});}
   })().catch(error=>reply({error:error.message}));
   return true;
 });
+function jobMetrics(job){
+  const now=Date.now(),started=job.runStartedAt||job.startedAt||now;
+  const recent=(Array.isArray(job.captureTimes)?job.captureTimes:[]).filter(value=>value>=now-60000);
+  return {count:Number(job.count||0),elapsed_ms:Math.max(0,now-started),per_minute:recent.length};
+}

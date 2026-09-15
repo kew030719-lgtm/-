@@ -219,7 +219,8 @@ class SiteAdapter(ABC):
     # render results. 前程无忧 needs ~4s: at 1.2s and 2.5s its result list has no
     # metadata attributes at all, and only at ~4s do all twenty appear.
     render_wait_ms: int = 1200
-    # Regexes the Chrome extension uses to decide what it may navigate to.
+    # Regex applied to URL.pathname by the Chrome extension when deciding
+    # whether a discovered URL is a job detail page.
     job_path_pattern: str = ""
     login_pattern: str = ""
     # Selector that proves real job content rendered (used by detect_blocked).

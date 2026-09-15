@@ -37,7 +37,9 @@ class Job51Adapter(SiteAdapter):
     tracking_query = frozenset({"from", "refer", "utm_source", "utm_medium", "sensorsname"})
     min_delay_seconds = 12.0
     render_wait_ms = 4000
-    job_path_pattern = r"jobs\.51job\.com/[a-z]+/\d+\.html"
+    # The browser helper applies this expression to URL.pathname, not the full
+    # URL. District slugs such as ``guangzhou-thq`` are valid too.
+    job_path_pattern = r"/[a-z-]+/\d+\.html"
     login_pattern = r"/pc/login|/user/login|passport"
     job_content_selector = ".joblist-item, .job_msg, .bmsg"
     challenge_tokens = (
