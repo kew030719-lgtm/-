@@ -4,9 +4,14 @@ The global 7-day plan lives on Comparison.action_plan and covers the top three
 postings. This module is scoped to one posting: a day-by-day plan plus interview
 questions, every one tied to an evidence block.
 
-Evidence discipline matches the rest of the product — the model emits block ids,
-the backend fills in the verbatim quotes, and anything ungrounded fails the task
-rather than reaching the user as a stated fact.
+Evidence discipline matches the rest of the product, but the division of labour
+is different here: the model writes prose and **the backend picks the evidence**.
+The configured endpoint cannot fill structured fields reliably (see
+agent.InterviewPrepOutput), so asking it for block ids produced empty lists. It
+does write clean `类别|问题` lines, so the backend parses those, matches each
+question against the blocks that could support it, and drops any question
+nothing supports. The invariant is unchanged — ungrounded content never reaches
+the user — but it no longer depends on the model choosing a citation.
 """
 
 from __future__ import annotations
@@ -278,7 +283,7 @@ class InterviewService:
             output, source = await self.agent.prepare_interview(profile, snapshot, missing_skills)
         except Exception as exc:
             return fallback_days, fallback_questions, "fallback", f"模型调用失败（{type(exc).__name__}），已改用本地确定性版本。"
-        days, questions = _normalise(output)
+        days, questions = _normalise(output, profile, snapshot)
         if not questions:
             # Distinct from an ungrounded answer. An empty reply contains nothing
             # to conceal, so the deterministic plan is used and the reason is
@@ -309,39 +314,89 @@ def _answer_hint(category: str) -> str:
     }.get(category, "结合真实经历作答，不要虚构。")
 
 
-def _normalise(output: InterviewPrepOutput) -> tuple[list[InterviewDay], list[InterviewQuestion]]:
-    """Keep only model output that is shaped well enough to validate."""
-    days: list[InterviewDay] = []
-    for index, item in enumerate(output.days or [], start=1):
-        day = item.day or index
-        if not (1 <= day <= 14):
+def _parse_rows(text: str, columns: int) -> list[list[str]]:
+    """Parse `a|b` lines, ignoring anything that is not one.
+
+    The model returns prose because it cannot fill structured fields reliably;
+    this is where the structure comes from. An optional bullet or enumerator is
+    tolerated — the prompt asks for neither, but a model that adds one has still
+    answered usefully.
+    """
+    rows: list[list[str]] = []
+    for raw in (text or "").splitlines():
+        line = re.sub(r"^\s*(?:[-•·*]|\d+\s*[.、)）])\s*", "", raw.strip()).strip()
+        if not line or "|" not in line:
             continue
-        focus = (item.focus or "").strip()
-        if not focus:
-            continue
-        days.append(InterviewDay(
-            day=day, focus=focus[:200], deliverable="",
-            evidence_ids=[str(value) for value in item.evidence_ids if str(value)],
-        ))
+        parts = [part.strip() for part in line.split("|")]
+        parts += [""] * (columns - len(parts))
+        rows.append(parts[:columns])
+    return rows
+
+
+def _ground_question(question: str, category: str, profile: CandidateProfile,
+                     snapshot: JobSnapshot) -> str | None:
+    """The block that supports this question, or None when nothing does.
+
+    The model is not asked for block ids — it proved unable to supply them — so
+    the backend picks. A question nothing supports is dropped, which keeps the
+    "never show ungrounded content" rule intact without depending on the model.
+    """
+    lowered = question.lower()
+    tokens = {token for token in SKILLS if token in lowered}
+    # A question can carry specifics beyond skills — "结合你 2 年 Python 经验" — and
+    # validate_interview checks every number against the cited quote. Matching on
+    # skills alone picked a block that supported "python" but not "2", so the
+    # question was rejected after being grounded. The chosen block has to support
+    # the whole question, or the question is not groundable and is dropped.
+    numbers = re.findall(r"\d+(?:\.\d+)?%?", question)
+
+    def supports(item: Evidence) -> bool:
+        quote = item.quote
+        if tokens and not any(token in quote.lower() for token in tokens):
+            return False
+        return all(number in quote for number in numbers)
+
+    candidate = list(profile.evidence)
+    posting = list(snapshot.blocks)
+    # A gap question names a requirement the posting states, so look there first.
+    pools = (posting, candidate) if category == "能力缺口" else (candidate, posting)
+    if tokens or numbers:
+        for pool in pools:
+            for item in pool:
+                if supports(item):
+                    return item.block_id
+        return None
+    # Nothing specific named: cite the posting, which is why it is being asked.
+    for pool in (posting, candidate):
+        if pool:
+            return pool[0].block_id
+    return None
+
+
+def _normalise(output: InterviewPrepOutput, profile: CandidateProfile,
+               snapshot: JobSnapshot) -> tuple[list[InterviewDay], list[InterviewQuestion]]:
+    """Turn the model's prose into grounded structure, dropping what cannot be."""
     questions: list[InterviewQuestion] = []
-    for item in output.questions or []:
-        question = (item.question or "").strip()
+    for category, question in _parse_rows(output.questions, 2):
         if not question:
             continue
-        ids = [str(value) for value in item.evidence_ids if str(value)]
-        if not ids:
-            # Ungrounded by construction. Dropped here rather than constructed:
-            # InterviewQuestion requires at least one id, so building it would
-            # raise a pydantic ValidationError, which is not a ResumeError and so
-            # would escape the degrade path and fail the whole run.
+        if category not in CATEGORIES:
+            category = "技术深挖"
+        block_id = _ground_question(question, category, profile, snapshot)
+        if block_id is None:
             continue
-        category = item.category if item.category in CATEGORIES else "技术深挖"
-        # why_asked / answer_hint are derived, not asked for: the endpoint drops
-        # them when the schema gets wide. See agent.InterviewQuestionOutput.
         questions.append(InterviewQuestion(
             question_id=f"q_{uuid4().hex[:10]}", question=question[:300], category=category,
             why_asked=_why_asked(category),
             answer_hint=_answer_hint(category),
-            evidence_ids=ids,
+            evidence_ids=[block_id],
         ))
-    return days[:14], questions[:12]
+
+    days: list[InterviewDay] = []
+    for index, (focus, deliverable) in enumerate(_parse_rows(output.days, 2)[:7], start=1):
+        if not focus:
+            continue
+        days.append(InterviewDay(
+            day=index, focus=focus[:200], deliverable=deliverable[:200], evidence_ids=[],
+        ))
+    return days, questions[:12]

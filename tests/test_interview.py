@@ -13,7 +13,9 @@ import pytest
 from career_radar.agent import AgentService
 from career_radar.config import Settings
 from career_radar.database import Database
-from career_radar.interview import InterviewService, fallback_interview, validate_interview
+from career_radar.interview import (
+    CATEGORIES, InterviewService, fallback_interview, validate_interview,
+)
 from career_radar.resume import ResumeError, build_profile
 from career_radar.schemas import Evidence, InterviewPrep, InterviewQuestion, JobSnapshot
 from career_radar.web import create_app
@@ -149,19 +151,22 @@ def test_a_forged_model_answer_is_replaced_never_shown(tmp_path):
 
     React is neither required by the posting (so it is not an exempted gap) nor
     present in the candidate's evidence, so naming it asserts an ability the
-    resume does not support. The answer is replaced by the grounded deterministic
-    plan and the reason recorded — rather than failing the task, which against an
-    endpoint that reliably mangles this schema would leave the feature empty.
+    resume does not support. The backend matches each question against the blocks
+    that could support it, so this one simply finds nothing and is dropped.
+
+    Note the model cannot forge a citation here at all: it is not asked for block
+    ids, because against this endpoint it returns them empty. Grounding is the
+    backend's job, which is why a bad question is dropped rather than caught.
     """
     database, service, profile, snapshot = prepared(tmp_path, api_key="configured")
 
     async def forged(_profile, _snapshot, _missing):
-        from career_radar.agent import InterviewPrepOutput, InterviewQuestionOutput
+        from career_radar.agent import InterviewPrepOutput
 
-        return InterviewPrepOutput(questions=[InterviewQuestionOutput(
-            question="请说明你用 React 做过的前端项目。", category="技术深挖",
-            evidence_ids=[profile.evidence[0].block_id],
-        )]), "langgraph"
+        return InterviewPrepOutput(
+            questions="技术深挖|请说明你用 React 做过的前端项目。",
+            days="通读岗位证据|要求清单",
+        ), "langgraph"
 
     service.agent.prepare_interview = forged
     prep = service.create(profile.profile_id, snapshot.snapshot_id)
@@ -169,33 +174,76 @@ def test_a_forged_model_answer_is_replaced_never_shown(tmp_path):
     stored = database.get_interview_prep(prep.prep_id)
 
     assert result.status == "SUCCEEDED"
+    # Nothing survived to ground, so the deterministic plan stands in.
     assert stored.source == "fallback"
-    assert "证据校验" in stored.note and "React" in stored.note
-    # The forgery is quoted in the note and appears nowhere else.
     assert not any("React" in question.question for question in stored.questions)
     assert stored.questions and all(question.citations for question in stored.questions)
 
 
-def test_a_model_question_without_evidence_is_dropped_not_fatal(tmp_path):
-    """InterviewQuestion requires an id, so a malformed one would raise a pydantic
-    ValidationError — not a ResumeError, so it would bypass the degrade path."""
+def test_the_backend_grounds_the_questions_it_keeps(tmp_path):
+    """The model supplies prose only; the backend decides the citation."""
     database, service, profile, snapshot = prepared(tmp_path, api_key="configured")
 
-    async def ungrounded(_profile, _snapshot, _missing):
-        from career_radar.agent import InterviewPrepOutput, InterviewQuestionOutput
+    async def prose(_profile, _snapshot, _missing):
+        from career_radar.agent import InterviewPrepOutput
 
-        return InterviewPrepOutput(questions=[
-            InterviewQuestionOutput(question="没有证据的问题", category="技术深挖", evidence_ids=[]),
-            InterviewQuestionOutput(question="   ", category="技术深挖", evidence_ids=["x"]),
-        ]), "langgraph"
+        return InterviewPrepOutput(
+            questions="\n".join([
+                "技术深挖|请说明你如何用 FastAPI 提供异步 API？",   # candidate evidence
+                "能力缺口|岗位要求 Kubernetes，你打算如何补齐？",   # posting evidence
+                "行为面|你的职业规划是什么？",                      # nothing specific
+                "乱写类别|请问你还有什么问题？",
+            ]),
+            days="\n".join([
+                "通读岗位证据，列出硬性门槛|要求清单",
+                "补齐技能缺口|最小示例",
+            ]),
+        ), "langgraph"
 
-    service.agent.prepare_interview = ungrounded
+    service.agent.prepare_interview = prose
+    prep = service.create(profile.profile_id, snapshot.snapshot_id)
+    result = asyncio.run(service.generate(prep.prep_id))
+
+    assert result.source == "langgraph"
+    assert len(result.questions) == 4, "all four are nameable, three by skill"
+    assert len(result.days) == 2
+    known = {item.block_id for item in profile.evidence} | {b.block_id for b in snapshot.blocks}
+    for question in result.questions:
+        assert question.evidence_ids and set(question.evidence_ids) <= known
+        assert question.citations and question.citations[0].quote
+    # An unrecognised category degrades to the default rather than dropping it.
+    assert any(q.question.startswith("请问你还有什么问题") for q in result.questions)
+    assert all(q.category in CATEGORIES for q in result.questions)
+    # A gap question cites the posting, a candidate one cites the resume.
+    gap = next(q for q in result.questions if q.category == "能力缺口")
+    assert all(c.source_type == "job" for c in gap.citations)
+
+
+def test_a_blank_question_is_dropped_and_a_claimless_one_is_kept(tmp_path):
+    """A question that asserts nothing cannot be ungrounded.
+
+    "你的职业规划是什么？" claims nothing about the candidate, so citing the
+    posting as its context is honest; a blank line is dropped. Days fall back on
+    their own rather than leaving the panel empty.
+    """
+    database, service, profile, snapshot = prepared(tmp_path, api_key="configured")
+
+    async def prose(_profile, _snapshot, _missing):
+        from career_radar.agent import InterviewPrepOutput
+
+        return InterviewPrepOutput(
+            questions="技术深挖|   \n行为面|你的职业规划是什么？", days="",
+        ), "langgraph"
+
+    service.agent.prepare_interview = prose
     prep = service.create(profile.profile_id, snapshot.snapshot_id)
     result = asyncio.run(service.generate(prep.prep_id))
 
     assert result.status == "SUCCEEDED", "a malformed model question must not fail the run"
-    assert result.source == "fallback"
-    assert result.questions
+    assert result.source == "langgraph"
+    assert [q.category for q in result.questions] == ["行为面"]
+    assert result.questions[0].citations
+    assert result.days, "days must fall back rather than be left empty"
 
 
 def test_an_empty_model_answer_degrades_and_says_so(tmp_path):
@@ -206,7 +254,7 @@ def test_an_empty_model_answer_degrades_and_says_so(tmp_path):
     async def empty(_profile, _snapshot, _missing):
         from career_radar.agent import InterviewPrepOutput
 
-        return InterviewPrepOutput(), "langgraph"
+        return InterviewPrepOutput(questions="", days=""), "langgraph"
 
     service.agent.prepare_interview = empty
     prep = service.create(profile.profile_id, snapshot.snapshot_id)

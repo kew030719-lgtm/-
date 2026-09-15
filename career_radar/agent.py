@@ -53,22 +53,10 @@ class ComparisonAgentOutput(BaseModel):
     plan: list[str] = Field(min_length=7, max_length=7)
 
 
-class InterviewDayOutput(BaseModel):
-    """Deliberately flat. The configured endpoint handles small schemas reliably
-    (greetings, role recommendations) but silently drops fields on a deeply
-    nested one: asking for five keys per question produced empty strings and an
-    empty evidence list. why_asked / answer_hint / deliverable are derived in
-    interview._normalise instead of asked for."""
+class InterviewProseOutput(BaseModel):
+    """One string. See the note on InterviewPrepOutput for why."""
 
-    day: int = 0
-    focus: str = ""
-    evidence_ids: list[str] = Field(default_factory=list)
-
-
-class InterviewQuestionOutput(BaseModel):
-    question: str = ""
-    category: str = ""
-    evidence_ids: list[str] = Field(default_factory=list)
+    text: str = ""
 
 
 class GreetingOutput(BaseModel):
@@ -77,8 +65,21 @@ class GreetingOutput(BaseModel):
 
 
 class InterviewPrepOutput(BaseModel):
-    days: list[InterviewDayOutput] = Field(default_factory=list)
-    questions: list[InterviewQuestionOutput] = Field(default_factory=list)
+    """Two prose blocks, not nested JSON.
+
+    Measured against the configured endpoint: asked for objects with five keys it
+    fills only the first and narrates the rest; asked for two top-level lists it
+    returns nothing usable; asked for `类别|问题` lines it returns exactly that,
+    six for six, correctly categorised and grounded in the supplied evidence.
+    Structured output is not reliable here, so the model writes prose and
+    interview.py does the structuring and the grounding.
+
+    That split is the right one anyway: the backend is what decides whether a
+    citation holds, so it should not depend on the model supplying one.
+    """
+
+    questions: str = ""
+    days: str = ""
 
 
 class ResumeBulletOutput(BaseModel):
@@ -285,30 +286,46 @@ evidence_ids 必须覆盖打招呼语里的每一项事实：提到某项技能�
         one posting. Every question cites an evidence block id — the model never
         authors quotes, the backend fills them in.
         """
-        # `questions` is generated first and every field is length-capped on
-        # purpose. With days first, the model spent its entire token budget
-        # narrating day 1 — restating these instructions inside `focus` — and ran
-        # out before reaching the questions, returning an empty list.
-        prompt = """为一个具体岗位生成面试准备。直接输出最终 JSON，不要复述本提示，不要输出推理过程。
-必须同时返回 questions 和 days，两者都不能为空数组。每个字段都要简短。
-questions 共 6 项，每项只有三个字段：question(不超过 40 字的中文问句), category(技术深挖/项目经历/能力缺口/行为面/反问), evidence_ids。
-days 共 7 项，每项只有三个字段：day(整数 1-7), focus(不超过 30 字), evidence_ids。
-evidence_ids 只能取给定证据的 block_id，必须至少一个。
-提出候选人能力的问题时，evidence_ids 必须包含支撑该能力的候选人证据；
-针对岗位缺失技能提问时，引用说明该要求的岗位证据。
-不得编造候选人未提供的经历、技能或数字。返回 JSON，不使用 Markdown。
-输入：\n""" + json.dumps({
+        # Two calls, each asking for one plain string. A single-field object is
+        # the shape this endpoint answers reliably; the multi-field nested one it
+        # does not. Two calls cost more wall-clock than one, but a single call
+        # asking for both lists came back empty and unusable.
+        evidence = json.dumps({
             "profile": {"skills": profile.skills, "experience_years": profile.experience_years,
                         "education": profile.education,
                         "evidence": [item.model_dump() for item in profile.evidence]},
-            "job": snapshot.model_dump(),
+            "job": {"title": snapshot.title, "company": snapshot.company,
+                    "responsibilities": snapshot.responsibilities[:10],
+                    "required_skills": snapshot.required_skills[:10]},
             "missing_skills": missing_skills,
         }, ensure_ascii=False)
-        output, _registered, runtime_source = await self._run_structured(
-            prompt, f"interview-{snapshot.snapshot_id}", InterviewPrepOutput,
-            system_prompt=SYSTEM_PROMPT, timeout_seconds=240, max_tokens=6000,
+
+        questions_prompt = """根据下面的证据，为这个岗位面试列出 6 个问题。
+每行一个，格式固定为：类别|问题
+类别只能是：技术深挖、项目经历、能力缺口、行为面、反问
+问题必须扣住证据里真实出现的技能或经历；针对岗位要求但简历没有的技能，用「能力缺口」类别，如实说明缺口。
+除此之外不要输出任何内容：不要编号，不要解释，不要复述本提示，不要输出推理过程。
+输入：\n""" + evidence
+        days_prompt = """根据下面的证据，为这个岗位面试安排 7 天准备计划。
+每行一天，格式固定为：重点|交付物
+重点不超过 30 字，交付物不超过 20 字。第 1 天到第 7 天按顺序排列。
+除此之外不要输出任何内容：不要编号，不要解释，不要复述本提示，不要输出推理过程。
+输入：\n""" + evidence
+
+        questions_text, runtime_source = await self._prose(
+            questions_prompt, f"interview-q-{snapshot.snapshot_id}", max_tokens=2000,
         )
-        return output, runtime_source
+        days_text, _ = await self._prose(
+            days_prompt, f"interview-d-{snapshot.snapshot_id}", max_tokens=1500,
+        )
+        return InterviewPrepOutput(questions=questions_text, days=days_text), runtime_source
+
+    async def _prose(self, prompt: str, task_id: str, *, max_tokens: int) -> tuple[str, str]:
+        output, _registered, runtime_source = await self._run_structured(
+            prompt, task_id, InterviewProseOutput,
+            system_prompt=SYSTEM_PROMPT, timeout_seconds=240, max_tokens=max_tokens,
+        )
+        return output.text or "", runtime_source
 
     @staticmethod
     def _fallback_recommendations(profile: CandidateProfile) -> list[RoleRecommendation]:
