@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  tests:
+  backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,8 +17,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # The Chrome helper is plain JS, so Node runs its tests with no build step.
       - run: node --test tests/*.test.cjs
+      # Fixtures only: no Playwright browsers are installed and no live site is
+      # contacted. The live smoke test needs CAREER_RADAR_LIVE_TEST=1.
       - run: pytest -q
         env:
           TOKEN_PLAN_API_KEY: ""
           CAREER_RADAR_LIVE_TEST: "0"
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # `check` is typecheck + vitest. Without this job a type error or a broken
+      # unit test reached the SPA unnoticed, because the backend job does not
+      # look at frontend/ at all.
+      - run: npm run check
+      # Proves the SPA still builds. The build output is gitignored, so nothing
+      # here is committed — a failure just means the app would not have shipped.
+      - run: npm run build

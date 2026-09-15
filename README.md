@@ -20,15 +20,31 @@ CareerRadar 是一个本地单用户的简历驱动求职 Agent。它把简历�
 ## 快速启动
 
 ```bash
-cp .env.example .env
-# 在 .env 中填写 TOKEN_PLAN_API_KEY
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/playwright install chromium
-.venv/bin/uvicorn career_radar.web:app --host 127.0.0.1 --port 8000
+cp .env.example .env          # 在 .env 中填写 TOKEN_PLAN_API_KEY
+PYTHONPATH=.deps:. python3 -m uvicorn career_radar.web:app --host 127.0.0.1 --port 8000
 ```
 
-访问 `http://127.0.0.1:8000`。也可以运行 `docker compose up --build`。
+界面在 **http://127.0.0.1:8000/app/**（旧的 `/` 页面仍然保留）。也可以运行 `docker compose up --build`。
+
+**`/app` 需要先构建过前端才存在。** 构建产物 `career_radar/static/app/` 与依赖一样被 Git 忽略，所以全新克隆后要先构建一次：
+
+```bash
+cd frontend
+npm ci
+npm run build          # 产物输出到 career_radar/static/app/
+```
+
+开发前端时改用 `npm run dev`，它的 `/api` 反向代理指向 `127.0.0.1:8000`，不需要配置 CORS。
+
+**换到全新机器、或没有 `.deps/` 时**，用标准 Python 环境：
+
+```bash
+sudo apt install python3-venv      # 缺 ensurepip 时 `python3 -m venv` 会建出一个没有 pip 的空壳
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/playwright install chromium   # 仅 HTTP 模式需要；浏览器助手模式不需要
+.venv/bin/uvicorn career_radar.web:app --host 127.0.0.1 --port 8000
+```
 
 在 Chrome 120+ 打开 `chrome://extensions`，开启“开发者模式”，选择“加载已解压的扩展程序”并选中本仓库的 `browser-extension/` 目录（也可下载助手 ZIP 后解压，选择包含 manifest.json 的目录）。已安装旧版的用户需要刷新扩展并确认新增的本机端口与 BOSS 站点权限。保持 CareerRadar 页面为当前标签页，打开扩展后依次点击“使用当前 CareerRadar 页面地址”和“启用自动接单”；这样即使主程序没有运行在 8000 端口，助手也会回传到正确实例。
 
@@ -73,20 +89,20 @@ PydanticAI 是单 Agent 内核，LangGraph 是工作流编排层。抓取队列�
 ## 测试
 
 ```bash
-.venv/bin/pytest
+# 后端与扩展测试必须在仓库根目录执行（tests/ui_chat.test.cjs 用的是相对路径）
+PYTHONPATH=.deps:. python3 -m pytest -q
 node --test tests/*.test.cjs
-
-cd frontend && npm test      # vitest：URL 状态与展示函数的单元测试
 ```
 
-前端开发与构建：
+前端（`cd frontend` 后执行）：
 
 ```bash
-cd frontend
 npm run dev                  # Vite dev server，/api 反向代理到 127.0.0.1:8000
-npm run build                # 输出到 career_radar/static/app/，随后访问 /app/
 npm run check                # typecheck + vitest
+npm run build                # 输出到 career_radar/static/app/，随后访问 /app/
 ```
+
+`.github/workflows/ci.yml` 有两个 job：`backend` 跑 pytest 与扩展的 node 测试，`frontend` 跑 `npm ci` + `npm run check` + `npm run build`。**两者都必须通过**——前端类型错误或构建失败不会体现在后端 job 里。
 
 `/app` 在未构建时不存在（挂载条件为 `static/app/index.html` 存在），此时 `/` 的旧页面仍是唯一界面。
 
