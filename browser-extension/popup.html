@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="popup.css"><title>CareerRadar 浏览器助手</title></head>
+<body>
+  <main>
+    <strong>CareerRadar 浏览器助手</strong>
+    <p>启用一次后自动接收本机 CareerRadar 任务。专用标签页会自动搜索和采集，关闭弹窗仍会继续。</p>
+    <label for="endpoint">主程序地址</label>
+    <input id="endpoint" value="http://127.0.0.1:8000" spellcheck="false">
+    <button id="use-current" class="secondary">使用当前 CareerRadar 页面地址</button>
+    <button id="connect" class="secondary">检查并连接主程序</button>
+    <button id="enable">启用自动接单</button>
+    <button id="resume" class="secondary">已完成登录或验证，继续任务</button>
+    <button id="cancel" class="secondary">停止任务并关闭自动接单</button>
+    <output id="status">等待操作</output>
+
+    <section id="apply-section">
+      <strong>投递辅助</strong>
+      <p class="muted">助手只把打招呼语填进页面输入框，<b>不会替你点击发送</b>。内容同时会复制到剪贴板作为保底。</p>
+      <div id="apply-list"><p class="muted">正在读取…</p></div>
+    </section>
+  </main>
+  <script src="controls.js"></script>
+</body>
+</html>

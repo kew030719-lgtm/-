@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CareerRadar · 简历驱动求职 Agent</title>
   <meta name="description" content="从简历证据到真实岗位排名的本地求职分析台">
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v=20260911-tailoring">
   <script src="/static/htmx.min.js" defer></script>
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=20260911-tailoring" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -16,6 +16,7 @@
       <span>CareerRadar</span>
     </a>
     <div class="system-state" hx-get="/fragments/health" hx-trigger="load, every 30s" hx-swap="innerHTML"><span class="pulse"></span> 正在检查本地服务…</div>
+    <button class="chat-top-button" id="chat-toggle" type="button" aria-controls="chat-drawer" aria-expanded="true"><span>✦</span> 求职 Agent</button>
   </header>
 
   <main class="shell">
@@ -27,6 +28,7 @@
         <li data-step="3"><span>03</span><div><b>发现岗位</b><small>BOSS 公开页面</small></div></li>
         <li data-step="4"><span>04</span><div><b>岗位排名</b><small>固定权重评分</small></div></li>
         <li data-step="5"><span>05</span><div><b>准备计划</b><small>能力缺口 · 7 天</small></div></li>
+        <li data-step="6"><span>06</span><div><b>定向简历</b><small>目标公司 · DOCX · PDF</small></div></li>
       </ol>
       <div class="privacy-note">
         <b>隐私边界</b>
@@ -76,7 +78,7 @@
       </section>
 
       <section class="panel" id="panel-3" aria-labelledby="crawl-title">
-        <div class="panel-heading"><span>03</span><div><h2 id="crawl-title">发现真实岗位</h2><p>单并发抓取公开搜索页；遇到验证或登录会停下等待手动输入。</p></div></div>
+        <div class="panel-heading"><span>03</span><div><h2 id="crawl-title">发现真实岗位</h2><p>公开页面自动抓取；站点要求登录时由普通浏览器助手接续采集。</p></div></div>
         <div class="radar-wrap">
           <div class="radar" aria-hidden="true"><i></i><b></b></div>
           <div class="progress-copy"><strong id="progress-value">0%</strong><h3 id="progress-message">任务排队中</h3><p id="progress-meta">正在准备检索组合…</p></div>
@@ -84,15 +86,16 @@
         <div class="progress-track"><i id="progress-bar"></i></div>
         <button class="secondary hidden retry-button" id="retry-task" type="button">重试当前任务</button>
         <form id="manual-form" class="manual-box hidden">
-          <h3>页面需要登录或人工确认</h3><p id="manual-reason"></p>
+          <h3>自动采集助手</h3><p id="manual-reason"></p>
           <div class="login-box">
-            <div><b>使用你的 BOSS 登录会话</b><small>CareerRadar 显示 BOSS 官方登录页，扫码登录；会话只保存在当前服务内存。</small></div>
+            <div><b>安装并启用一次，之后自动搜索岗位</b><small>助手在专用标签页搜索、翻页和读取详情。需要登录或验证时会暂停，完成后继续原任务。</small></div>
             <div class="login-actions">
-              <button class="secondary" id="open-boss-login" type="button">加载 BOSS 登录页面</button>
-              <button class="primary compact hidden" id="confirm-boss-login" type="button">我已完成登录，继续抓取</button>
+              <a class="secondary button-link" href="/browser-helper.zip">下载浏览器助手</a>
+              <a class="primary compact button-link" href="https://www.zhipin.com/" target="_blank" rel="noopener">在普通浏览器打开 BOSS</a>
             </div>
-            <div class="login-preview hidden" id="login-preview"><img id="boss-login-preview" alt="BOSS 官方登录页面预览"></div>
-            <p id="login-status" class="login-status">尚未连接登录会话</p>
+            <ol class="helper-steps"><li>在 Chrome 扩展程序页面加载解压的扩展；已安装旧版的用户请点击扩展的刷新按钮。</li><li>保持本页面为当前标签页，在扩展中点击“使用当前 CareerRadar 页面地址”，看到“已连接”后再启用自动接单。</li><li>之后无需逐个打开岗位，最多 30 秒自动领取任务；需要登录时，在专用标签页登录，再点击扩展中的“继续任务”。</li><li>当前任务：<code id="capture-task-id">task_…</code> <button class="text-button" id="copy-task-id" type="button">复制</button></li></ol>
+            <div class="login-actions"><button class="secondary" id="refresh-capture-count" type="button">刷新采集数量</button><button class="primary compact" id="finish-browser-capture" type="button">提前结束并分析已有岗位</button><button class="secondary" id="cancel-browser-task" type="button">取消任务</button></div>
+            <p id="login-status" class="login-status">尚未收到浏览器助手采集的岗位</p>
           </div>
           <div class="manual-divider"><span>仍无法访问时，粘贴岗位描述</span></div>
           <input id="manual-url" type="url" placeholder="https://www.zhipin.com/job_detail/…" required>
@@ -114,8 +117,56 @@
         <button class="ghost" id="restart" type="button">分析另一份简历</button>
       </section>
 
+      <section class="panel" id="panel-6" aria-labelledby="tailor-title">
+        <div class="panel-heading"><span>06</span><div><h2 id="tailor-title">目标公司定向简历</h2><p>选择具体岗位，确认真实补充信息，再生成可编辑的两套简历。</p></div></div>
+        <div class="tailor-target" id="tailor-target"><b>尚未选择目标岗位</b><p>从岗位排名选择，或在下方粘贴 JD、填写 BOSS 公开职位链接。</p></div>
+        <form id="target-job-form" class="target-job-form">
+          <label><span>目标公司</span><input id="target-company" maxlength="200" placeholder="例如 星图科技"></label>
+          <label><span>岗位名称</span><input id="target-title" maxlength="200" placeholder="例如 Python 后端工程师"></label>
+          <label class="wide"><span>BOSS 公开职位链接</span><input id="target-url" type="url" placeholder="https://www.zhipin.com/job_detail/…"></label>
+          <label class="wide"><span>岗位描述 JD</span><textarea id="target-content" rows="6" maxlength="80000" placeholder="粘贴岗位职责、必需技能和任职要求……"></textarea></label>
+          <div class="tailor-actions wide"><button class="secondary" id="capture-target" type="button">读取职位链接</button><button class="primary compact" type="submit">使用这份 JD</button></div>
+        </form>
+        <form id="tailoring-questions" class="tailoring-questions hidden">
+          <div class="section-intro"><h3>确认缺失事实</h3><p>只填写你真实做过的内容；没有相关经历时点击跳过。</p></div>
+          <div id="question-list"></div>
+          <button class="primary compact" type="submit">确认事实并生成简历</button>
+        </form>
+        <div id="tailoring-progress" class="tailoring-progress hidden"><span class="pulse"></span><b>Agent 正在生成定向简历…</b></div>
+        <div id="resume-workbench" class="resume-workbench hidden">
+          <div class="resume-toolbar">
+            <div class="template-switch"><button class="active" data-template="technical" type="button">简洁技术版</button><button data-template="business" type="button">紧凑商务版</button></div>
+            <label>历史版本 <select id="resume-version"></select></label>
+          </div>
+          <div class="resume-preview" id="resume-preview"></div>
+          <div class="resume-diff" id="resume-diff"></div>
+          <div class="tailor-actions"><button class="secondary" id="save-resume-version" type="button">保存为新版本</button><button class="primary compact" id="export-resume" type="button">生成两套 DOCX 和 PDF</button></div>
+          <div class="export-links" id="export-links"></div>
+        </div>
+      </section>
+
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
     </section>
   </main>
+
+  <aside class="chat-drawer" id="chat-drawer" aria-label="求职 Agent 对话">
+    <div class="chat-header">
+      <div><span class="chat-agent-mark">✦</span><div><b>CareerRadar Agent</b><small id="chat-context-label">通用咨询 · 未使用个人简历</small></div></div>
+      <button id="chat-close" type="button" aria-label="关闭对话">×</button>
+    </div>
+    <div class="chat-quick" id="chat-quick">
+      <button type="button">我适合什么岗位？</button>
+      <button type="button">如何准备项目经历？</button>
+    </div>
+    <div class="chat-messages" id="chat-messages" aria-live="polite">
+      <div class="chat-empty"><span>✦</span><b>可以直接和我讨论求职问题</b><p>提交简历后，我会结合简历证据、真实岗位和固定评分回答。</p></div>
+    </div>
+    <div class="chat-typing hidden" id="chat-typing"><i></i><i></i><i></i><span>Agent 正在读取上下文</span></div>
+    <form class="chat-form" id="chat-form">
+      <textarea id="chat-input" rows="2" maxlength="4000" placeholder="问岗位排名、能力缺口，或修改搜索条件……" required></textarea>
+      <button type="submit" aria-label="发送消息">↑</button>
+    </form>
+    <p class="chat-footnote">修改画像或任务前会先请你确认</p>
+  </aside>
 </body>
 </html>

@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "CareerRadar 浏览器助手",
+  "version": "0.4.0",
+  "minimum_chrome_version": "120",
+  "description": "自动接收 CareerRadar 任务，在支持的招聘站点搜索、翻页并采集岗位。",
+  "permissions": ["tabs", "scripting", "storage", "alarms"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://www.zhipin.com/*",
+    "https://m.zhipin.com/*",
+    "https://www.zhaopin.com/*",
+    "https://sou.zhaopin.com/*",
+    "https://m.zhaopin.com/*",
+    "https://www.51job.com/*",
+    "https://we.51job.com/*",
+    "https://jobs.51job.com/*",
+    "https://m.51job.com/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {
+    "default_title": "CareerRadar 自动采集",
+    "default_popup": "popup.html"
+  }
+}

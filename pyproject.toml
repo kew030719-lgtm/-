@@ -9,7 +9,11 @@ dependencies = [
   "httpx>=0.28,<1",
   "jinja2>=3.1,<4",
   "playwright>=1.62,<1.63",
-  "pydantic>=2.10,<3",
+  "pydantic>=2.12,<3",
+  # The `mcp` extra is what makes it possible to attach an external MCP server
+  # as a client. CareerRadar no longer *serves* MCP itself.
+  "pydantic-ai-slim[openai,mcp]>=1.107,<2",
+  "langgraph>=1.2,<2",
   "pypdf>=5,<7",
   "python-docx>=1.1,<2",
   "python-dotenv>=1,<2",

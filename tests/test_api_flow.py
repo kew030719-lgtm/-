@@ -22,7 +22,6 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(
         data_dir=tmp_path, database_path=tmp_path / "test.db", model_base_url="https://example.invalid/v1",
         model_name="test", api_key="", crawl_delay_seconds=0, crawl_max_jobs=3,
-        hermes_path=tmp_path / "missing-hermes",
     )
 
 
@@ -88,3 +87,34 @@ async def run_retry(tmp_path):
         assert response.status_code == 202
         assert response.json()["retried_from"] == "failed_one"
         assert response.json()["task_id"] != "failed_one"
+
+
+def test_browser_helper_capture_and_finish(tmp_path):
+    asyncio.run(run_browser_capture(tmp_path))
+
+
+async def run_browser_capture(tmp_path):
+    app = create_app(settings(tmp_path))
+    fixture = (Path(__file__).parent / "fixtures" / "job.html").read_text()
+    async with app.router.lifespan_context(app):
+      async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        app.state.database.create_task("task_helper", "discovery", {"profile_id": "profile_test"})
+        capture = await client.post("/api/browser-captures", json={
+            "run_id": "task_helper", "url": "https://www.zhipin.com/job_detail/abc123.html",
+            "html": fixture, "city": "北京",
+        })
+        assert capture.status_code == 200
+        assert capture.json()["count"] == 1
+        assert capture.json()["snapshot"]["transport"] == "browser"
+        task = (await client.get("/api/tasks/task_helper")).json()
+        assert task["status"] == "NEEDS_MANUAL_INPUT"
+
+        finish = await client.post("/api/browser-captures/task_helper/finish")
+        assert finish.status_code == 200
+        assert finish.json()["count"] == 1
+        task = (await client.get("/api/tasks/task_helper")).json()
+        assert task["status"] == "SUCCEEDED"
+
+        archive = await client.get("/browser-helper.zip")
+        assert archive.status_code == 200
+        assert archive.headers["content-type"] == "application/zip"

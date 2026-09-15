@@ -6,3 +6,7 @@ __pycache__/
 *.py[cod]
 data/
 playwright-report/
+
+# Frontend: dependencies and the built SPA (produced by `npm run build`).
+frontend/node_modules/
+career_radar/static/app/

@@ -10,7 +10,7 @@ from uuid import uuid4
 from docx import Document
 from pypdf import PdfReader
 
-from .schemas import CandidateProfile, Evidence
+from .schemas import CandidateContact, CandidateProfile, Evidence
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -24,6 +24,12 @@ SKILLS = {
     "llm": "LLM", "大模型": "大模型", "rag": "RAG", "agent": "Agent",
     "langchain": "LangChain", "pandas": "Pandas", "numpy": "NumPy",
     "javascript": "JavaScript", "typescript": "TypeScript", "vue": "Vue", "react": "React",
+}
+PHONE_RE = re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+GENERIC_NAME_LABELS = {
+    "基本信息", "个人信息", "个人简历", "求职简历", "简历", "联系方式",
+    "personal information", "resume", "curriculum vitae",
 }
 
 
@@ -105,6 +111,7 @@ def build_profile(text: str, profile_id: str | None = None) -> CandidateProfile:
         evidence.append(Evidence(
             source_type="resume", source_id=profile_id,
             block_id=f"resume-{section}-{stable}", quote=line, section=section,
+            provenance="uploaded_resume",
         ))
 
     lowered = cleaned.lower()
@@ -119,6 +126,56 @@ def build_profile(text: str, profile_id: str | None = None) -> CandidateProfile:
         profile_id=profile_id, skills=skills, experience_years=experience_years,
         education=education, evidence=evidence,
     )
+
+
+def extract_candidate_contact(profile: CandidateProfile) -> CandidateContact:
+    """Split contact data from model-visible evidence while retaining useful text."""
+    contact = CandidateContact(profile_id=profile.profile_id)
+    public: list[Evidence] = []
+    for index, item in enumerate(profile.evidence):
+        quote = item.quote
+        phone = PHONE_RE.search(quote)
+        email = EMAIL_RE.search(quote)
+        if phone and not contact.phone:
+            contact.phone = phone.group(0)
+        if email and not contact.email:
+            contact.email = email.group(0)
+        location = re.search(r"(?:现居|所在地|地址|城市)\s*[:：]?\s*([^|｜，,；;]{2,20})", quote)
+        if not contact.location and location:
+            contact.location = location.group(1).strip()
+        normalized_name = quote.strip(" ：:").lower()
+        is_name_candidate = (
+            not contact.name and index < 3 and item.section == "概览" and
+            not phone and not email and not re.search(r"\d", quote) and
+            2 <= len(quote.strip()) <= 30 and
+            normalized_name not in GENERIC_NAME_LABELS and
+            not any(word in quote.lower() for word in ("简历", "求职", "技能", "教育", "经历", "项目", "resume"))
+        )
+        if is_name_candidate:
+            contact.name = quote.strip()
+            continue
+        sanitized = EMAIL_RE.sub("", PHONE_RE.sub("", quote))
+        if location:
+            sanitized = sanitized.replace(location.group(0), "")
+        sanitized = re.sub(r"(?:电话|手机|邮箱|电子邮箱|现居|所在地|地址|城市)\s*[:：]?", "", sanitized)
+        sanitized = re.sub(r"\s*[|｜·]\s*[|｜·]*\s*", " | ", sanitized).strip(" |｜·，,；;")
+        if sanitized:
+            stable = hashlib.sha256(f"{item.section}\0{sanitized}".encode()).hexdigest()[:12]
+            public.append(item.model_copy(update={
+                "quote": sanitized,
+                "block_id": f"resume-{item.section}-{stable}",
+                "provenance": item.provenance or "uploaded_resume",
+            }))
+    profile.evidence = public
+    return contact
+
+
+def sanitize_candidate_contact(contact: CandidateContact) -> CandidateContact:
+    """Remove labels that were historically mistaken for a candidate name."""
+    value = contact.model_copy(deep=True)
+    if value.name.strip(" ：:").lower() in GENERIC_NAME_LABELS:
+        value.name = ""
+    return value
 
 
 def validate_citations(citations: list[Evidence], sources: list[Evidence]) -> None:

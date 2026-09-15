@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from .schemas import CandidateProfile, Evidence, JobScore, JobSnapshot
+from .sites.base import parse_salary
 
 
 SKILL_GROUPS = {
@@ -87,9 +88,17 @@ def score_job(profile: CandidateProfile, job: JobSnapshot) -> JobScore:
         preference_parts.append(100 if city_match else 0)
         if not city_match:
             preference_risk = f"城市不符合已确认偏好：{job.city}"
-    desired_salary = _salary_range(profile.salary_preference)
-    offered_salary = _salary_range(job.salary)
-    if desired_salary and offered_salary:
+    # Both sides go through the same normaliser. Adapters already reduce a posting's
+    # own units ("20-35K", "15-25万/年", "8000-12000元/月") to monthly yuan, and the
+    # candidate's free-text preference is parsed the same way — comparing a raw
+    # "20–30K" against a yuan figure would be off by three orders of magnitude.
+    desired_salary = parse_salary(profile.salary_preference)
+    offered_salary = (
+        (job.salary_min, job.salary_max)
+        if job.salary_min is not None and job.salary_max is not None
+        else parse_salary(job.salary)
+    )
+    if None not in desired_salary and None not in offered_salary and desired_salary[0] is not None:
         overlaps = max(desired_salary[0], offered_salary[0]) <= min(desired_salary[1], offered_salary[1])
         preference_parts.append(100 if overlaps else 0)
         if not overlaps and not preference_risk:
