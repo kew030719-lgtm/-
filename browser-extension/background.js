@@ -223,7 +223,12 @@ async function tick(completedTabId){
     if(!CareerQueue.allowed(job,tab.url))throw new Error('采集页跳转到其他域名，已暂停');
     const [{result:page}]=await chrome.scripting.executeScript({target:{tabId:job.tabId},func:readPage});
     if(CareerQueue.isLogin(job,page.url))throw new Error('请在采集标签页完成登录，然后点击扩展中的继续任务');
-    if(!page.text.trim())throw new Error('页面白屏，请在采集标签页检查后继续任务');
+    if(!page.text.trim()){
+      // `complete` only means the document loaded. BOSS renders the useful SPA
+      // body shortly afterwards, so an immediate empty read is not a white page.
+      if(Date.now()-job.startedAt<=15000){scheduleTick(Date.now()+500);return;}
+      throw new Error('页面持续白屏，请在采集标签页检查后继续任务');
+    }
     const body={run_id:job.task_id,url:page.url,html:page.html,city:item.city,page_duration_ms:Math.max(0,Date.now()-job.startedAt)};
     if(item.kind==='search'){
       const result=await api('/api/browser-search-pages',body);

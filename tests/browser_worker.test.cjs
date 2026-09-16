@@ -73,8 +73,11 @@ test('auto search, canonical link dedup, persistent queue and stop at cap withou
   assert.equal(h.calls.length,3); // page two never requested after cap
   assert.equal(h.calls.filter(x=>x.includes('/a.html')).length,1);
 });
-test('blank page pauses same cursor and resumes after user action',async()=>{
-  const h=harness();await h.tick();h.setFail(true);await h.tick();
+test('an initially empty SPA retries before a persistent blank page pauses',async()=>{
+  const h=harness();await h.tick();h.setFail(true);await h.complete();
+  assert.notEqual(h.state.job.paused,true);
+  assert.ok(h.scheduled.includes(500),'an empty body during SPA render should retry quickly');
+  await h.tick(15001);
   assert.equal(h.state.job.paused,true);
   const before=h.calls.length;await h.tick();assert.equal(h.calls.length,before);
   h.setFail(false);await h.command('resume');await h.tick();
