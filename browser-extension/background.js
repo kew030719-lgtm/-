@@ -138,6 +138,7 @@ async function tick(completedTabId){
   try{
     const stored=await chrome.storage.local.get(['enabled','job']);
     if(!stored.enabled)return;
+    try{await api('/api/browser-helper/heartbeat',{});}catch{/* normal retry handling below covers task calls */}
     job=stored.job;
     if(completedTabId!==undefined&&(!job||job.done||job.phase!=='read'||completedTabId!==job.tabId))return;
     const preferred=await preferredTaskId();
@@ -223,7 +224,7 @@ async function tick(completedTabId){
     const [{result:page}]=await chrome.scripting.executeScript({target:{tabId:job.tabId},func:readPage});
     if(CareerQueue.isLogin(job,page.url))throw new Error('请在采集标签页完成登录，然后点击扩展中的继续任务');
     if(!page.text.trim())throw new Error('页面白屏，请在采集标签页检查后继续任务');
-    const body={run_id:job.task_id,url:page.url,html:page.html,city:item.city};
+    const body={run_id:job.task_id,url:page.url,html:page.html,city:item.city,page_duration_ms:Math.max(0,Date.now()-job.startedAt)};
     if(item.kind==='search'){
       const result=await api('/api/browser-search-pages',body);
       CareerQueue.discovered(job,result.links,item.city);

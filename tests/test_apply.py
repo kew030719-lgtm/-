@@ -293,6 +293,20 @@ def test_apply_api_end_to_end(tmp_path):
                 sent = (await client.post(f"/api/applications/{body['application_id']}/submitted")).json()
                 assert sent["status"] == "SUBMITTED" and sent["submitted_at"]
 
+                tracked = (await client.patch(
+                    f"/api/applications/{body['application_id']}",
+                    json={
+                        "status": "ASSESSMENT",
+                        "application_deadline": "2026-10-09",
+                        "reminder_at": "2026-10-08T09:00",
+                        "note": "准备笔试",
+                    },
+                )).json()
+                assert tracked["status"] == "ASSESSMENT"
+                assert tracked["application_deadline"] == "2026-10-09"
+                assert tracked["reminder_at"] == "2026-10-08T09:00"
+                assert tracked["note"] == "准备笔试"
+
                 listed = (await client.get(f"/api/applications?profile_id={profile['profile_id']}")).json()
                 assert len(listed) == 1
 
@@ -300,7 +314,7 @@ def test_apply_api_end_to_end(tmp_path):
                 again = await client.post("/api/applications", json={
                     "profile_id": profile["profile_id"], "snapshot_id": "snap_api_ap",
                 })
-                assert again.json()["status"] == "SUBMITTED"
+                assert again.json()["status"] == "ASSESSMENT"
 
                 unknown = await client.post(f"/api/applications/{body['application_id']}/hired")
                 assert unknown.status_code == 404

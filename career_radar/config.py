@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env", override=False)
 
 
-@dataclass(frozen=True)
+def default_data_dir() -> Path:
+    """Return the per-user data directory used by an installed app."""
+    override = os.getenv("APP_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    if sys.platform == "win32" and os.getenv("LOCALAPPDATA"):
+        return (Path(os.environ["LOCALAPPDATA"]) / "CareerRadar").resolve()
+    return (ROOT / "data").resolve()
+
+
+@dataclass
 class Settings:
     data_dir: Path
     database_path: Path
@@ -27,7 +37,7 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
-        data_dir = Path(os.getenv("APP_DATA_DIR", str(ROOT / "data"))).resolve()
+        data_dir = default_data_dir()
         return cls(
             data_dir=data_dir,
             database_path=data_dir / "career_radar.db",

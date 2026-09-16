@@ -28,6 +28,7 @@ export interface Profile {
   cities: string[]
   salary_preference: string | null
   work_type_preference: string | null
+  expected_graduation_year?: number | null
   selected_roles: RoleRecommendation[]
   recommendations: RoleRecommendation[]
   confirmed: boolean
@@ -44,6 +45,12 @@ export interface JobSnapshot {
   required_skills: string[]
   status: string
   canonical_url: string
+  recruitment_type: 'campus' | 'internship' | 'experienced' | 'unknown'
+  graduation_years: number[]
+  recruitment_batch: string | null
+  published_date: string | null
+  application_deadline: string | null
+  conversion_opportunity: boolean | null
 }
 
 export interface JobScore {
@@ -53,6 +60,8 @@ export interface JobScore {
   matched_skills: string[]
   missing_skills: string[]
   risks: string[]
+  graduate_fit: number | null
+  graduate_advantages: string[]
   citations: Evidence[]
 }
 
@@ -165,7 +174,9 @@ export interface InterviewPrep {
   task_id: string | null
 }
 
-export type ApplicationStatus = 'DRAFT' | 'READY' | 'OPENED' | 'SUBMITTED' | 'REPLIED' | 'SKIPPED'
+export type ApplicationStatus =
+  | 'DRAFT' | 'READY' | 'OPENED' | 'SUBMITTED' | 'ASSESSMENT'
+  | 'INTERVIEW' | 'OFFER' | 'REJECTED' | 'REPLIED' | 'SKIPPED'
 
 export interface Application {
   application_id: string
@@ -183,6 +194,8 @@ export interface Application {
   source: string
   error: string | null
   task_id: string | null
+  application_deadline: string | null
+  reminder_at: string | null
 }
 
 export interface TargetJob {

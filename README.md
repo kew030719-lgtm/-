@@ -1,6 +1,6 @@
 # CareerRadar
 
-CareerRadar 是一个本地单用户的简历驱动求职 Agent。它把简历拆成稳定证据块，由 PydanticAI Agent 推荐岗位方向；用户确认方向和城市后，自研抓取器读取 BOSS 直聘公开页面，再以固定权重排名并校验所有引用。LangGraph 负责编排 Agent 调用、审批状态和故障恢复。
+CareerRadar 是一个 Windows 优先、本地单用户、面向高校毕业生的简历驱动求职 Agent。它把简历拆成稳定证据块，由 PydanticAI Agent 推荐岗位方向；用户确认方向和城市后，自研抓取器读取三个招聘站点的公开页面，再以固定权重排名并校验所有引用。LangGraph 负责编排 Agent 调用、审批状态和故障恢复。模型由用户自行配置服务地址、模型名和密钥。
 
 ## 产品流程
 
@@ -18,6 +18,14 @@ CareerRadar 是一个本地单用户的简历驱动求职 Agent。它把简历�
 扫描版 PDF 暂不支持 OCR。遇到登录页、验证码、白屏或未知页面结构时，任务进入 `NEEDS_MANUAL_INPUT`。用户在专用标签页完成登录或验证后，点击扩展中的“继续任务”，从原队列位置恢复。助手不调用 Cookie API；只提取任务标签页的页面内容，上传前移除输入框、内嵌框架和非结构化脚本。采集完成后后端自动启动分析，关闭扩展弹窗不影响采集。
 
 ## 快速启动
+
+### Windows 安装包（发布通道）
+
+手动运行 `.github/workflows/windows-release.yml` 可构建 PyInstaller sidecar 与 Tauri 2 的 MSI/NSIS 安装包。安装版把 SQLite、导出和日志放在 `%LOCALAPPDATA%\CareerRadar`；首次启动向导配置模型服务并测试连接，密钥通过 Windows Credential Manager 保存。完整构建步骤和仍需真人验收的签名、卸载、更新、Chrome Web Store 项目见 [Windows 发布与验收](docs/WINDOWS_RELEASE.md)。
+
+当前 Linux 开发环境未生成 Windows 安装包；在全新 Windows 虚拟机通过发布清单前，不把它标记为已发布。
+
+### 源码开发
 
 ```bash
 cp .env.example .env          # 在 .env 中填写 TOKEN_PLAN_API_KEY
@@ -46,7 +54,7 @@ python3 -m venv .venv
 .venv/bin/uvicorn career_radar.web:app --host 127.0.0.1 --port 8000
 ```
 
-在 Chrome 120+ 打开 `chrome://extensions`，开启“开发者模式”，选择“加载已解压的扩展程序”并选中本仓库的 `browser-extension/` 目录（也可下载助手 ZIP 后解压，选择包含 manifest.json 的目录）。已安装旧版的用户需要刷新扩展并确认新增的本机端口与 BOSS 站点权限。保持 CareerRadar 页面为当前标签页，打开扩展后依次点击“使用当前 CareerRadar 页面地址”和“启用自动接单”；这样即使主程序没有运行在 8000 端口，助手也会回传到正确实例。
+源码开发时，在 Chrome 120+ 打开 `chrome://extensions`，开启“开发者模式”，选择“加载已解压的扩展程序”并选中本仓库的 `browser-extension/` 目录。正式发布必须改由 Chrome Web Store 安装并完成审核，普通用户不应接触开发者模式；发布账号和扩展签名不在仓库内，当前尚未完成该外部验收。主程序可通过 `/api/browser-helper/status` 检测助手心跳并给出修复提示。
 
 助手每 30 秒检查一次待处理任务；采集过程中由页面加载完成事件直接推进，30 秒检查仅作为 Chrome 休眠后的恢复兜底。BOSS 页面导航间隔至少 10 秒，智联与前程无忧至少 12 秒，并始终使用单个专用标签页串行采集。弹窗会显示已采集数量、运行时长和最近一分钟速度；切换主程序地址时自动清除旧实例的任务游标，主程序暂时断开时自动重试，找不到的旧任务会被丢弃。队列、阶段、下次导航时间和开关存放在扩展本地存储，可在后台工作线程重启后恢复；关闭浏览器期间不执行。取消任务后后端拒绝继续接收岗位。
 
@@ -55,7 +63,19 @@ python3 -m venv .venv
 - 旧版真实 BOSS 任务采集 20 条通常约需 23 分钟，主要原因是导航和读取分别等待一次 30 秒轮询。
 - 当前版本在页面加载完成后立即读取，但仍严格执行 10/12 秒的导航间隔。无登录或验证阻断时，20 条岗位的验收目标是 **5–8 分钟**；这是按单标签页串行请求计算的目标，必须以刷新扩展后的真实任务数据为准，不能仅凭 fixture 测试宣称达成。
 - 前程无忧详情规则匹配 URL 的 pathname，并支持 `/guangzhou/173657951.html` 和 `/guangzhou-thq/173657296.html` 这类城市、区县路径。遇到滑块验证时仍进入 `NEEDS_MANUAL_INPUT`，不会绕过验证或把列表页文本保存为岗位职责。
-- 本次修改的自动验证结果为：后端 `137 passed, 2 skipped`，扩展 Node 测试通过，前端类型检查、20 项测试及生产构建通过。真实站点的成功数、总耗时、P50/P95、重复数和暂停原因需要按站点另行记录。
+- 当前自动验证结果为：后端 `142 passed, 2 skipped`，扩展 Node 测试通过，前端类型检查、20 项测试及生产构建通过。真实站点的成功数、总耗时、P50/P95、重复数和暂停原因需要按站点另行记录。
+
+### 产品化接口与本地数据
+
+- `GET /api/settings`、`PUT /api/settings/model`、`POST /api/settings/model/test`：读取非敏感设置、更新模型配置、测试连接。响应永不返回原始密钥。
+- `GET /api/collection-metrics` 与 `GET /api/collection-metrics/{run_id}`：读取站点、页数、有效岗位、重复数、状态、耗时、吞吐、P50/P95 和失败类别。
+- `GET /api/browser-helper/status`：读取 Chrome 助手最近心跳；75 秒未上报视为断开。
+- `GET /api/local-data/export`：导出全部业务数据、导出文件和日志，不包含模型密钥。
+- `DELETE /api/local-data?confirmation=DELETE_ALL_LOCAL_DATA`：明确确认后删除业务数据、导出、日志、设置和安全存储中的密钥。
+
+岗位快照会额外保存页面明确写出的校招/实习类型、毕业年份、经验门槛、招聘批次、发布日期、截止日期和转正机会；无法确认时保持未知。排名单独展示“应届生适配度”，不偷偷改变原有固定总分。投递记录支持待准备、已打开、已投递、笔试、面试、Offer、拒绝等阶段，并保留截止日期与提醒时间。
+
+隐私、故障和工程边界分别见 [隐私说明](docs/PRIVACY.md)、[故障排查](docs/TROUBLESHOOTING.md) 和 [产品边界](docs/PRODUCT_BOUNDARIES.md)。
 
 现有本机依赖启动命令（默认自动采集模式不需要 Playwright 浏览器）：
 
@@ -140,7 +160,7 @@ npm run build                # 输出到 career_radar/static/app/，随后访问
 
 定向简历接口从 `POST /api/target-jobs` 和 `POST /api/resume-tailorings` 开始，追问确认后由异步任务生成草稿。`POST /api/resume-drafts/{id}/versions` 保存网页编辑的新版本，`POST /api/resume-drafts/{id}/exports` 生成两套 DOCX/PDF，下载文件仅从本地 `data/exports` 返回。模型生成的每条内容都必须引用当前候选人的证据；未经证实的技能、数字或机构会使任务进入 `FAILED_VALIDATION`。
 
-真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。字段存在不等于语义准确，仍需抽查原始岗位。
+真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。`scripts/generate_evaluation_report.py` 会根据 SQLite 和仓库外的脱敏评测清单生成 JSON/Markdown 发布门槛报告；格式和使用方法见 [evaluation/README.md](evaluation/README.md)。字段存在不等于语义准确，仍需抽查原始岗位。
 
 `scripts/repair_job_fields.py` 用于修复早期解析器把推荐列表混入职责的历史快照，仅处理指定任务。运行前自动备份 SQLite；保留原抓取时间与快照 ID，不将历史文本重解析冒充重新抓取。应在生成分析报告前运行。
 
@@ -148,7 +168,7 @@ CI 只读取 `tests/fixtures`，不会访问真实站点。真实站点冒烟测
 
 ## 当前限制
 
-支持 BOSS 直聘、智联招聘、前程无忧，城市为北京、上海、深圳、广州、杭州、成都、武汉、南京、西安、苏州。不包含自动投递、自动联系招聘者、多用户权限、OCR、代理池或验证码处理。浏览器助手需要 Chrome 的开发者模式加载，站点页面结构变化时可能需要手动粘贴岗位描述。fixture 测试通过并不保证真实站点始终可访问。
+支持 BOSS 直聘、智联招聘、前程无忧，首版职位方向聚焦 AI、开发和数据类校招岗位，城市为北京、上海、深圳、广州、杭州、成都、武汉、南京、西安、苏州。不包含自动投递、自动联系招聘者、多用户权限、OCR、代理池或验证码处理。源码版本的浏览器助手仍需 Chrome 开发者模式；公开版必须完成 Chrome Web Store 发布。站点页面结构变化时可能需要手动粘贴岗位描述。fixture 测试通过并不保证真实站点始终可访问。
 
 各站点的适配情况并不相同，以下是**实测结论**而非推测：
 

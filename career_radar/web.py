@@ -3,11 +3,12 @@ from __future__ import annotations
 import html
 import io
 import zipfile
-from pathlib import Path
-from urllib.parse import urlencode
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -15,16 +16,30 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from .agent import AgentService
+from .apply import ApplyService
 from .chat import ChatQueue, ChatService
 from .config import ROOT, Settings
-from .sites import SITES, CrawlError, cities_for, get_site, job_identity, site_for_url
-from .apply import ApplyService
 from .database import Database, now_iso
 from .interview import InterviewService
+from .local_settings import LocalSettingsStore, MemorySecretStore
 from .memory import MemoryService
-from .resume import ResumeError, SUPPORTED_CITIES, build_profile, extract_candidate_contact, extract_resume_text
-from .schemas import ChatActionKind, ResumeDraftVersion, ResumeExport, RoleRecommendation
+from .metrics import failure_category, present_metric
+from .privacy import delete_local_data, export_archive
+from .resume import (
+    SUPPORTED_CITIES,
+    ResumeError,
+    build_profile,
+    extract_candidate_contact,
+    extract_resume_text,
+)
+from .schemas import (
+    ChatActionKind,
+    ResumeDraftVersion,
+    ResumeExport,
+    RoleRecommendation,
+)
 from .services import TaskQueue
+from .sites import SITES, CrawlError, cities_for, get_site, job_identity, site_for_url
 from .tailoring import TailoringService, target_from_pasted, target_from_snapshot
 
 
@@ -34,6 +49,7 @@ class ProfileUpdate(BaseModel):
     salary_preference: str | None = None
     experience_years: float | None = None
     work_type_preference: str | None = None
+    expected_graduation_year: int | None = Field(default=None, ge=2000, le=2100)
 
 
 def site_allow_map(site_keys: list[str]) -> dict[str, dict[str, object]]:
@@ -63,6 +79,13 @@ class ApplicationRequest(BaseModel):
     snapshot_id: str
 
 
+class ApplicationUpdate(BaseModel):
+    status: str
+    application_deadline: str | None = Field(default=None, max_length=20)
+    reminder_at: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class DiscoveryRequest(BaseModel):
     profile_id: str
     mode: str = "browser"
@@ -87,11 +110,18 @@ class BrowserCaptureRequest(BaseModel):
     url: str
     html: str = Field(min_length=100, max_length=2_000_000)
     city: str = ""
+    page_duration_ms: int | None = Field(default=None, ge=0, le=300_000)
 
 
 class BrowserProgress(BaseModel):
     status: str
     message: str = Field(max_length=500)
+
+
+class ModelSettingsUpdate(BaseModel):
+    model_base_url: str = Field(min_length=8, max_length=2000)
+    model_name: str = Field(min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, max_length=4000)
 
 
 class ConversationCreate(BaseModel):
@@ -135,7 +165,13 @@ class ExportRequest(BaseModel):
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    injected_settings = settings is not None
     settings = settings or Settings.load()
+    # Injected Settings in tests must never touch an OS credential backend.
+    setting_store = LocalSettingsStore(
+        settings, MemorySecretStore(settings.api_key) if injected_settings else None,
+    )
+    settings = setting_store.settings
     database = Database(settings.database_path)
     agent = AgentService(settings)
     tailoring_service = TailoringService(database, agent, settings.data_dir)
@@ -174,6 +210,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.interview_service = interview_service
     app.state.apply_service = apply_service
     app.state.settings = settings
+    app.state.setting_store = setting_store
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
@@ -193,10 +230,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for adapter in SITES.values()
         ]
 
+    @app.post("/api/browser-helper/heartbeat")
+    async def browser_helper_heartbeat():
+        database.set_runtime_state("browser_helper", {"connected": True})
+        return {"ok": True}
+
+    @app.get("/api/browser-helper/status")
+    async def browser_helper_status():
+        state = database.get_runtime_state("browser_helper")
+        if not state:
+            return {"connected": False, "last_seen_at": None, "help": "请安装并启用 CareerRadar Chrome 助手"}
+        last_seen = datetime.fromisoformat(state["last_seen_at"])
+        connected = (datetime.now(UTC) - last_seen).total_seconds() <= 75
+        return {
+            "connected": connected, "last_seen_at": state["last_seen_at"],
+            "help": None if connected else "Chrome 助手超过 75 秒未连接，请检查扩展是否启用",
+        }
+
     @app.get("/health")
     async def health():
         return {"status": "ok", "model": settings.model_name, "runtime": "pydantic_langgraph",
                 "api_key_configured": bool(settings.api_key)}
+
+    @app.get("/api/settings")
+    async def read_settings():
+        return setting_store.public()
+
+    @app.get("/api/local-data/export")
+    async def export_local_data():
+        content = export_archive(database, settings.data_dir, setting_store.public())
+        return Response(
+            content=content, media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="career-radar-data.zip"'},
+        )
+
+    @app.delete("/api/local-data", status_code=204)
+    async def delete_all_local_data(confirmation: str = ""):
+        if confirmation != "DELETE_ALL_LOCAL_DATA":
+            raise HTTPException(409, "删除全部本地数据需要明确确认")
+        delete_local_data(database, settings.data_dir, setting_store)
+        return Response(status_code=204)
+
+    @app.put("/api/settings/model")
+    async def update_model_settings(body: ModelSettingsUpdate):
+        try:
+            setting_store.update(**body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return setting_store.public()
+
+    @app.post("/api/settings/model/test")
+    async def test_model_connection():
+        if not settings.api_key:
+            raise HTTPException(409, "请先配置模型密钥")
+        try:
+            async with httpx.AsyncClient(
+                base_url=settings.model_base_url, timeout=10, trust_env=False,
+                headers={"Authorization": f"Bearer {settings.api_key}"},
+            ) as client:
+                response = await client.get("/models")
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, "模型服务连接失败，请检查地址、模型名和密钥") from exc
+        return {"ok": True, "model_name": settings.model_name}
 
     @app.get("/fragments/health", response_class=HTMLResponse)
     async def health_fragment():
@@ -325,6 +421,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         profile.cities = update.cities
         profile.salary_preference = update.salary_preference
         profile.work_type_preference = update.work_type_preference
+        profile.expected_graduation_year = update.expected_graduation_year
         if update.experience_years is not None:
             profile.experience_years = update.experience_years
         profile.confirmed = True
@@ -348,6 +445,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database.update_task(task_id, message="等待 Chrome 浏览器助手自动接单，请安装并启用助手")
         else:
             task_id = await worker.submit("discovery", payload)
+        database.initialize_collection_metric(task_id, body.sites)
         return {"task_id": task_id, "status": "QUEUED"}
 
     @app.get("/api/tasks/{task_id}")
@@ -371,6 +469,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         task = database.get_task(task_id)
         if task["payload"].get("mode") == "browser":
             database.update_task(task_id, status="FAILED", message="任务已取消", error="任务已取消")
+            database.update_collection_metric(task_id, status="FAILED", failure_category="cancelled")
         return {"task_id": task_id, "cancel_requested": True}
 
     @app.post("/api/tasks/{task_id}/retry", status_code=202)
@@ -387,6 +486,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database.create_task(new_task_id, task["kind"], task["payload"])
         else:
             new_task_id = await worker.submit(task["kind"], task["payload"])
+        if task["kind"] == "discovery":
+            database.initialize_collection_metric(new_task_id, task["payload"].get("sites") or ["boss"])
         return {"task_id": new_task_id, "status": "QUEUED", "retried_from": task_id}
 
     @app.get("/browser-helper.zip")
@@ -451,6 +552,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not searches:
             raise HTTPException(422, "所选站点都不支持当前城市")
         database.update_task(run_id, status="RUNNING", message="浏览器助手已接单，正在自动搜索岗位")
+        database.update_collection_metric(run_id, status="RUNNING")
         # The helper stays site-agnostic: the host allow-list, URL shapes and login
         # detection travel with the queue rather than being hard-coded in the
         # extension, so adding a site needs no extension change.
@@ -478,6 +580,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if body.status not in {"RUNNING", "NEEDS_MANUAL_INPUT", "FAILED"}:
             raise HTTPException(422, "无效状态")
         database.update_task(run_id, status=body.status, message=body.message)
+        database.update_collection_metric(
+            run_id, status=body.status,
+            failure_category=failure_category(body.message, body.status),
+            pause_reason=body.message if body.status == "NEEDS_MANUAL_INPUT" else None,
+        )
         return {"status": body.status}
 
     @app.post("/api/browser-search-pages")
@@ -488,6 +595,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             adapter = site_for_url(body.url)
             adapter.validate_url(body.url)
+            database.update_collection_metric(
+                body.run_id, site=adapter.key, pages=1, page_duration_ms=body.page_duration_ms,
+            )
             links = adapter.parse_search_page(body.html, body.url)
             if not links and not any(word in body.html for word in ("暂无相关职位", "没有找到相关职位", "没有找到")):
                 raise CrawlError("搜索页未加载、需要登录或结构无法识别，请检查采集标签页")
@@ -506,11 +616,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "已达到岗位上限")
         try:
             adapter = site_for_url(body.url)
+            database.update_collection_metric(
+                body.run_id, site=adapter.key, pages=1, page_duration_ms=body.page_duration_ms,
+            )
             snapshot = adapter.parse_job_page(body.html, body.url, body.city, "browser")
         except (CrawlError, KeyError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        before = len(database.list_snapshots(body.run_id))
         database.save_snapshot(job_identity(snapshot), body.run_id, snapshot)
         count = len(database.list_snapshots(body.run_id))
+        database.update_collection_metric(
+            body.run_id, site=adapter.key,
+            valid_jobs=1 if count > before else 0, duplicates=1 if count == before else 0,
+        )
         database.update_task(
             body.run_id, status="RUNNING" if task["status"] == "RUNNING" else "NEEDS_MANUAL_INPUT", progress=min(90, 10 + count * 4),
             message=f"浏览器助手已采集 {count} 个唯一岗位",
@@ -531,6 +649,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             run_id, status="SUCCEEDED", progress=100,
             message=f"浏览器助手采集完成，共保存 {count} 个唯一岗位",
         )
+        database.update_collection_metric(run_id, status="SUCCEEDED")
         profile_id = task["payload"].get("profile_id")
         comparison = None
         if database.get_profile(profile_id):
@@ -553,11 +672,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         database.save_snapshot(job_identity(snapshot), run_id, snapshot)
         database.update_task(run_id, status="SUCCEEDED", progress=100, message="已保存手动岗位描述")
+        database.update_collection_metric(run_id, site=snapshot.site, pages=1, valid_jobs=1, status="SUCCEEDED")
         return snapshot
 
     @app.get("/api/jobs")
     async def list_jobs(run_id: str | None = None):
         return database.list_snapshots(run_id)
+
+    @app.get("/api/collection-metrics")
+    async def collection_metrics():
+        return [present_metric(item) for item in database.list_collection_metrics()]
+
+    @app.get("/api/collection-metrics/{run_id}")
+    async def collection_metric(run_id: str):
+        metric = database.get_collection_metric(run_id)
+        if not metric:
+            raise HTTPException(404, "采集指标不存在")
+        return present_metric(metric)
 
     @app.post("/api/comparisons", status_code=202)
     async def create_comparison(body: ComparisonRequest):
@@ -694,6 +825,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not application:
             raise HTTPException(404, "投递记录不存在")
         return application
+
+    @app.patch("/api/applications/{application_id}")
+    async def update_application_board(application_id: str, body: ApplicationUpdate):
+        try:
+            application = apply_service.set_status(application_id, body.status)
+        except ResumeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if body.application_deadline is not None:
+            application.application_deadline = body.application_deadline or None
+        if body.reminder_at is not None:
+            application.reminder_at = body.reminder_at or None
+        if body.note is not None:
+            application.note = body.note
+        return database.save_application(application)
 
     @app.post("/api/applications/{application_id}/{state}")
     async def update_application(application_id: str, state: str):

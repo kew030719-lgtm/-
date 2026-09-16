@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import ChatDrawer from './components/chat/ChatDrawer'
+import SetupWizard from './components/SetupWizard'
 import Panel1Resume from './components/panels/Panel1Resume'
 import Panel2Confirm from './components/panels/Panel2Confirm'
 import Panel3Discovery from './components/panels/Panel3Discovery'
@@ -31,6 +32,7 @@ export default function App() {
 
   return (
     <>
+      <SetupWizard />
       <TopBar
         chatOpen={chatOpen}
         onToggleChat={() => actions.applyChatOpen(!chatOpen)}
@@ -96,6 +98,7 @@ export default function App() {
             onApply={actions.startApplication}
             onCopyGreeting={actions.copyGreeting}
             onApplicationStatus={actions.setApplicationStatus}
+            onApplicationBoardStatus={actions.setApplicationBoardStatus}
             onTailor={actions.beginTailoring}
             onInterview={actions.startInterviewPrep}
             onViewPlan={() => actions.goToStep(5)}

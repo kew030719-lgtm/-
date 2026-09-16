@@ -125,7 +125,9 @@ class ApplyService:
         application = Application(
             application_id=f"app_{uuid4().hex[:12]}", profile_id=profile_id,
             snapshot_id=snapshot_id, company=snapshot.company, title=snapshot.title,
-            url=snapshot.canonical_url, status="DRAFT", created_at=stamp, updated_at=stamp,
+            url=snapshot.canonical_url, status="DRAFT",
+            application_deadline=snapshot.application_deadline,
+            created_at=stamp, updated_at=stamp,
         )
         return self.database.save_application(application)
 
@@ -196,7 +198,10 @@ class ApplyService:
         application = self.database.get_application(application_id)
         if not application:
             raise ResumeError("投递记录不存在")
-        allowed = {"DRAFT", "READY", "OPENED", "SUBMITTED", "REPLIED", "SKIPPED"}
+        allowed = {
+            "DRAFT", "READY", "OPENED", "SUBMITTED", "ASSESSMENT",
+            "INTERVIEW", "OFFER", "REJECTED", "REPLIED", "SKIPPED",
+        }
         if status not in allowed:
             raise ResumeError(f"无效的投递状态：{status}")
         if status == "SUBMITTED" and not application.greeting:

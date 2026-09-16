@@ -1,4 +1,4 @@
-import type { Application, Comparison, JobSnapshot } from '../../types'
+import type { Application, ApplicationStatus, Comparison, JobSnapshot } from '../../types'
 import EvidenceCitations from '../EvidenceCitations'
 
 interface Props {
@@ -12,13 +12,19 @@ interface Props {
   onApply: (snapshotId: string) => Promise<void>
   onCopyGreeting: (greeting: string) => Promise<void>
   onApplicationStatus: (applicationId: string, next: 'opened' | 'submitted' | 'skip') => Promise<void>
+  onApplicationBoardStatus: (
+    applicationId: string,
+    next: ApplicationStatus,
+    fields?: { application_deadline?: string; reminder_at?: string },
+  ) => Promise<void>
   onViewPlan: () => void
   onToast: (message: string) => void
 }
 
 export default function Panel4Ranking({
   active, comparison, jobs, applications, applyBusy,
-  onTailor, onInterview, onApply, onCopyGreeting, onApplicationStatus, onViewPlan, onToast,
+  onTailor, onInterview, onApply, onCopyGreeting, onApplicationStatus,
+  onApplicationBoardStatus, onViewPlan, onToast,
 }: Props) {
   const applicationFor = (snapshotId: string) =>
     applications.find((item) => item.snapshot_id === snapshotId)
@@ -49,6 +55,16 @@ export default function Panel4Ranking({
               <div>
                 <h3>{job?.title || '岗位'}</h3>
                 <p>{job?.company || ''} · {job?.city || ''} · {job?.salary || '薪资未识别'}</p>
+                {job && job.recruitment_type !== 'unknown' ? (
+                  <p className="graduate-fit">
+                    {job.recruitment_type === 'internship' ? '实习' : job.recruitment_type === 'campus' ? '校招' : '社招'}
+                    {job.graduation_years.length ? ` · ${job.graduation_years.join('/')} 届` : ''}
+                    {job.recruitment_batch ? ` · ${job.recruitment_batch}` : ''}
+                    {job.application_deadline ? ` · 截止 ${job.application_deadline}` : ''}
+                  </p>
+                ) : null}
+                {ranking.graduate_fit !== null ? <p>应届生适配度：{ranking.graduate_fit}</p> : null}
+                {ranking.graduate_advantages.map((item) => <p className="graduate-fit" key={item}>✓ {item}</p>)}
                 <p>{ranking.explanation}</p>
                 <div className="skill-row">
                   <b>已匹配 {ranking.matched_skills.join('、') || '无法判断'}</b>
@@ -157,6 +173,49 @@ export default function Panel4Ranking({
                         CareerRadar 不会替你点击发送。请核对后在岗位页面上自行提交，
                         提交后再点「我已投递」记录结果。
                       </p>
+                      <label className="application-stage">
+                        投递进度
+                        <select
+                          value={application.status}
+                          onChange={(event) => void onApplicationBoardStatus(
+                            application.application_id, event.target.value as ApplicationStatus,
+                          )}
+                        >
+                          <option value="DRAFT">待准备</option>
+                          <option value="READY">已准备</option>
+                          <option value="OPENED">已打开</option>
+                          <option value="SUBMITTED">已投递</option>
+                          <option value="ASSESSMENT">笔试</option>
+                          <option value="INTERVIEW">面试</option>
+                          <option value="OFFER">Offer</option>
+                          <option value="REJECTED">拒绝</option>
+                          <option value="SKIPPED">跳过</option>
+                        </select>
+                      </label>
+                      <div className="application-dates">
+                        <label>
+                          截止日期
+                          <input
+                            type="date"
+                            value={application.application_deadline ?? ''}
+                            onChange={(event) => void onApplicationBoardStatus(
+                              application.application_id, application.status,
+                              { application_deadline: event.target.value },
+                            )}
+                          />
+                        </label>
+                        <label>
+                          提醒时间
+                          <input
+                            type="datetime-local"
+                            value={application.reminder_at?.slice(0, 16) ?? ''}
+                            onChange={(event) => void onApplicationBoardStatus(
+                              application.application_id, application.status,
+                              { reminder_at: event.target.value },
+                            )}
+                          />
+                        </label>
+                      </div>
                       {application.note ? <p className="apply-note">{application.note}</p> : null}
                     </div>
                   )

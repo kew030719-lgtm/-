@@ -188,6 +188,16 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS applications_profile ON applications(profile_id, created_at);
+                CREATE TABLE IF NOT EXISTS collection_metrics (
+                    run_id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS runtime_state (
+                    key TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS agent_memories (
                     id TEXT PRIMARY KEY,
                     profile_id TEXT NOT NULL,
@@ -273,6 +283,110 @@ class Database:
                             (json.dumps(payload, ensure_ascii=False), row["id"]),
                         )
 
+    def initialize_collection_metric(self, run_id: str, sites: list[str]) -> dict[str, Any]:
+        stamp = now_iso()
+        payload: dict[str, Any] = {
+            "run_id": run_id,
+            "status": "QUEUED",
+            "started_at": stamp,
+            "finished_at": None,
+            "pages": 0,
+            "valid_jobs": 0,
+            "duplicates": 0,
+            "page_durations_ms": [],
+            "failure_category": None,
+            "pause_reason": None,
+            "sites": {site: {"pages": 0, "valid_jobs": 0, "duplicates": 0} for site in sites},
+        }
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO collection_metrics(run_id,payload,updated_at) VALUES(?,?,?)",
+                (run_id, json.dumps(payload, ensure_ascii=False), stamp),
+            )
+        return self.get_collection_metric(run_id) or payload
+
+    def update_collection_metric(
+        self, run_id: str, *, site: str | None = None, pages: int = 0,
+        valid_jobs: int = 0, duplicates: int = 0, page_duration_ms: int | None = None,
+        status: str | None = None, failure_category: str | None = None,
+        pause_reason: str | None = None,
+    ) -> dict[str, Any]:
+        metric = self.get_collection_metric(run_id) or self.initialize_collection_metric(run_id, [site] if site else [])
+        for key, increment in (("pages", pages), ("valid_jobs", valid_jobs), ("duplicates", duplicates)):
+            metric[key] = int(metric.get(key, 0)) + increment
+        if site:
+            site_metric = metric.setdefault("sites", {}).setdefault(
+                site, {"pages": 0, "valid_jobs": 0, "duplicates": 0},
+            )
+            for key, increment in (("pages", pages), ("valid_jobs", valid_jobs), ("duplicates", duplicates)):
+                site_metric[key] = int(site_metric.get(key, 0)) + increment
+        if page_duration_ms is not None and page_duration_ms >= 0:
+            metric.setdefault("page_durations_ms", []).append(min(page_duration_ms, 300_000))
+        if status:
+            metric["status"] = status
+            if status in {"SUCCEEDED", "FAILED", "FAILED_VALIDATION"}:
+                metric["finished_at"] = now_iso()
+        if failure_category is not None:
+            metric["failure_category"] = failure_category
+        if pause_reason is not None:
+            metric["pause_reason"] = pause_reason
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO collection_metrics(run_id,payload,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
+                (run_id, json.dumps(metric, ensure_ascii=False), now_iso()),
+            )
+        return self.get_collection_metric(run_id) or metric
+
+    def get_collection_metric(self, run_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT payload FROM collection_metrics WHERE run_id=?", (run_id,)).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def list_collection_metrics(self) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT payload FROM collection_metrics ORDER BY updated_at DESC").fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def export_all_data(self) -> dict[str, list[dict[str, Any]]]:
+        """Return every user-owned row in a portable JSON-safe shape."""
+        tables = (
+            "profiles", "tasks", "jobs", "job_snapshots", "comparisons", "conversations",
+            "chat_messages", "chat_actions", "candidate_contacts", "target_jobs",
+            "supplemental_evidence", "resume_tailorings", "resume_draft_versions",
+            "resume_exports", "interview_preps", "applications", "agent_memories",
+            "collection_metrics",
+        )
+        exported: dict[str, list[dict[str, Any]]] = {}
+        with self.connect() as db:
+            for table in tables:
+                exported[table] = [dict(row) for row in db.execute(f"SELECT * FROM {table}").fetchall()]
+        return exported
+
+    def delete_all_data(self) -> None:
+        tables = (
+            "chat_actions", "chat_messages", "conversations", "supplemental_evidence",
+            "resume_exports", "resume_draft_versions", "resume_tailorings", "interview_preps",
+            "applications", "target_jobs", "comparisons", "agent_memories", "candidate_contacts",
+            "job_snapshots", "jobs", "collection_metrics", "tasks", "profiles",
+        )
+        with self.connect() as db:
+            for table in tables:
+                db.execute(f"DELETE FROM {table}")
+
+    def set_runtime_state(self, key: str, payload: dict[str, Any]) -> None:
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO runtime_state(key,payload,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
+                (key, json.dumps(payload, ensure_ascii=False), now_iso()),
+            )
+
+    def get_runtime_state(self, key: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT payload,updated_at FROM runtime_state WHERE key=?", (key,)).fetchone()
+        return {**json.loads(row["payload"]), "last_seen_at": row["updated_at"]} if row else None
+
     def save_profile(self, profile: CandidateProfile) -> None:
         stamp = now_iso()
         with self.connect() as db:
@@ -345,7 +459,11 @@ class Database:
             ).fetchone()
             if old:
                 previous = JobSnapshot.model_validate_json(old["payload"])
-                tracked = ("salary", "responsibilities", "required_skills", "status")
+                tracked = (
+                    "salary", "responsibilities", "required_skills", "status", "recruitment_type",
+                    "graduation_years", "experience_requirement_years", "recruitment_batch",
+                    "published_date", "application_deadline", "conversion_opportunity",
+                )
                 snapshot.changed_fields = [name for name in tracked if getattr(previous, name) != getattr(snapshot, name)]
             stamp = snapshot.fetched_at
             db.execute(

@@ -19,6 +19,7 @@ dependencies = [
   "python-dotenv>=1,<2",
   "python-multipart>=0.0.20,<1",
   "uvicorn[standard]>=0.34,<1",
+  "keyring>=25,<26; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

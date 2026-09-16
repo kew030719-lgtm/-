@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from bs4 import BeautifulSoup
 
+from ..graduate import extract_graduate_metadata
 from ..schemas import Evidence, JobSnapshot
 
 
@@ -177,12 +178,14 @@ def build_snapshot(
                 quote=value, section="职位原文",
             ))
     salary_min, salary_max = parse_salary(salary)
+    graduate = extract_graduate_metadata(body, experience)
     return JobSnapshot(
         snapshot_id=snapshot_id, platform_job_id=platform_job_id, canonical_url=canonical_url,
         site=site, title=title, company=company or "公司名称未识别", city=city, salary=salary,
         salary_min=salary_min, salary_max=salary_max, experience=experience, education=education,
         responsibilities=responsibilities, required_skills=skills,
         bonus_skills=list(bonus_skills or []), benefits=list(benefits or []), work_type=work_type,
+        **graduate,
         content_hash=content_hash, status=status, cleaned_text=body[:20_000],
         fetched_at=datetime.now(UTC).isoformat(), transport=transport, blocks=blocks,
     )

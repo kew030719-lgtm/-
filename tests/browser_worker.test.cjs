@@ -40,6 +40,7 @@ test('a completed page is read immediately while the next navigation keeps the s
   const h=harness();
   await h.tick();
   assert.equal(h.calls.length,1);
+  assert.ok(h.posts.some(url=>url.endsWith('/api/browser-helper/heartbeat')));
   await h.complete();
   assert.equal(h.state.job.queue.length,3,'search results should replace the search page immediately');
   await h.tick(9999);assert.equal(h.calls.length,1,'must not navigate before the ten-second floor');

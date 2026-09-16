@@ -9,6 +9,7 @@ from .agent import AgentService
 from .apply import ApplyService
 from .database import Database
 from .interview import InterviewService
+from .metrics import failure_category
 from .resume import ResumeError, validate_citations
 from .schemas import TaskStatus
 from .scoring import score_job
@@ -86,12 +87,21 @@ class TaskQueue:
                     raise RuntimeError(f"未知任务类型：{item.kind}")
             except NeedsManualInput as exc:
                 self.database.update_task(item.task_id, status=TaskStatus.NEEDS_MANUAL_INPUT, message=str(exc))
+                if item.kind == "discovery":
+                    self.database.update_collection_metric(
+                        item.task_id, status="NEEDS_MANUAL_INPUT",
+                        failure_category=failure_category(str(exc), "NEEDS_MANUAL_INPUT"), pause_reason=str(exc),
+                    )
             except ResumeError as exc:
                 self.database.update_task(item.task_id, status=TaskStatus.FAILED_VALIDATION, error=str(exc), message="证据校验失败")
             except asyncio.CancelledError:
                 self.database.update_task(item.task_id, status=TaskStatus.FAILED, error="任务已取消", message="任务已取消")
             except Exception as exc:
                 self.database.update_task(item.task_id, status=TaskStatus.FAILED, error=str(exc), message="任务失败")
+                if item.kind == "discovery":
+                    self.database.update_collection_metric(
+                        item.task_id, status="FAILED", failure_category=failure_category(str(exc), "FAILED"),
+                    )
             finally:
                 self.queue.task_done()
 
@@ -134,7 +144,13 @@ class TaskQueue:
                 raise NeedsManualInput("；".join(blocked))
             raise NeedsManualInput("没有解析到有效岗位，可粘贴岗位描述继续")
         for snapshot in snapshots:
+            before = len(self.database.list_snapshots(item.task_id))
             self.database.save_snapshot(job_identity(snapshot), item.task_id, snapshot)
+            after = len(self.database.list_snapshots(item.task_id))
+            self.database.update_collection_metric(
+                item.task_id, site=snapshot.site, pages=1,
+                valid_jobs=1 if after > before else 0, duplicates=1 if after == before else 0,
+            )
         # A site that needed a login does not invalidate the sites that worked.
         note = f"（{len(blocked)} 个站点需要人工处理）" if blocked else ""
         if failures:
@@ -143,6 +159,7 @@ class TaskQueue:
             item.task_id, status=TaskStatus.SUCCEEDED, progress=100,
             message=f"完成，共保存 {len(snapshots)} 个唯一岗位{note}",
         )
+        self.database.update_collection_metric(item.task_id, status="SUCCEEDED")
 
     async def _comparison(self, item: WorkItem) -> None:
         profile = self.database.get_profile(item.payload["profile_id"])

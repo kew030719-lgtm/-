@@ -26,6 +26,7 @@ export default function Panel2Confirm({
   const [selectedSites, setSelectedSites] = useState<string[]>([])
   const [salary, setSalary] = useState('')
   const [years, setYears] = useState('')
+  const [graduationYear, setGraduationYear] = useState('')
 
   // Re-seed whenever a different profile arrives (a fresh upload).
   useEffect(() => {
@@ -42,6 +43,7 @@ export default function Panel2Confirm({
     setSelectedCities(profile.cities ?? [])
     setSalary(profile.salary_preference ?? '')
     setYears(profile.experience_years == null ? '' : String(profile.experience_years))
+    setGraduationYear(profile.expected_graduation_year == null ? '' : String(profile.expected_graduation_year))
   }, [profile])
 
   // Default to the first site only: crawling several boards multiplies the run's
@@ -119,6 +121,7 @@ export default function Panel2Confirm({
       cities: selectedCities,
       salary_preference: salary || null,
       experience_years: years ? Number(years) : null,
+      expected_graduation_year: graduationYear ? Number(graduationYear) : null,
     }, selectedSites)
   }
 
@@ -253,6 +256,18 @@ export default function Panel2Confirm({
               placeholder="无法识别时可补充"
               value={years}
               onChange={(event) => setYears(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>毕业年份</span>
+            <input
+              id="graduation-year"
+              type="number"
+              min={2000}
+              max={2100}
+              placeholder="例如 2027，可留空"
+              value={graduationYear}
+              onChange={(event) => setGraduationYear(event.target.value)}
             />
           </label>
         </div>

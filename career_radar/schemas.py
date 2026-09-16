@@ -45,6 +45,7 @@ class CandidateProfile(BaseModel):
     cities: list[str] = Field(default_factory=list)
     salary_preference: str | None = None
     work_type_preference: str | None = None
+    expected_graduation_year: int | None = Field(default=None, ge=2000, le=2100)
     confirmed: bool = False
     analysis_source: Literal["langgraph", "fallback"] = "fallback"
 
@@ -86,6 +87,13 @@ class JobSnapshot(BaseModel):
     bonus_skills: list[str] = Field(default_factory=list)
     benefits: list[str] = Field(default_factory=list)
     work_type: str = ""
+    recruitment_type: Literal["campus", "internship", "experienced", "unknown"] = "unknown"
+    graduation_years: list[int] = Field(default_factory=list)
+    experience_requirement_years: float | None = None
+    recruitment_batch: str | None = None
+    published_date: str | None = None
+    application_deadline: str | None = None
+    conversion_opportunity: bool | None = None
     status: Literal["active", "offline", "unknown"] = "active"
     cleaned_text: str = ""
     content_hash: str
@@ -103,6 +111,8 @@ class JobScore(BaseModel):
     experience: float | None
     education: float | None
     preference: float | None
+    graduate_fit: float | None = None
+    graduate_advantages: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     matched_skills: list[str] = Field(default_factory=list)
     missing_skills: list[str] = Field(default_factory=list)
@@ -319,7 +329,10 @@ class Application(BaseModel):
     company: str = ""
     title: str = ""
     url: str = ""
-    status: Literal["DRAFT", "READY", "OPENED", "SUBMITTED", "REPLIED", "SKIPPED"] = "DRAFT"
+    status: Literal[
+        "DRAFT", "READY", "OPENED", "SUBMITTED", "ASSESSMENT",
+        "INTERVIEW", "OFFER", "REJECTED", "REPLIED", "SKIPPED",
+    ] = "DRAFT"
     greeting: str = ""
     greeting_evidence_ids: list[str] = Field(default_factory=list)
     # Filled by the backend from the cited blocks; the model never authors quotes.
@@ -333,6 +346,8 @@ class Application(BaseModel):
     created_at: str
     updated_at: str
     submitted_at: str | None = None
+    application_deadline: str | None = None
+    reminder_at: str | None = None
 
 
 class ResumeBullet(BaseModel):

@@ -1,0 +1,37 @@
+name: windows-package
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pip install -e . pyinstaller
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: python scripts/package_browser_extension.py --output dist/career-radar-browser-helper.zip
+      - run: pyinstaller --clean --noconfirm career-radar-sidecar.spec
+        working-directory: packaging
+      - shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force frontend/src-tauri/binaries
+          Copy-Item packaging/dist/career-radar-sidecar.exe frontend/src-tauri/binaries/career-radar-sidecar-x86_64-pc-windows-msvc.exe
+      - run: npm run tauri build
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CareerRadar-Windows
+          path: frontend/src-tauri/target/release/bundle/**/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CareerRadar-Chrome-Helper
+          path: dist/career-radar-browser-helper.zip

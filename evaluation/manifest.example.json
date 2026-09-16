@@ -1,0 +1,8 @@
+{
+  "resumes": [
+    {"id": "resume-01", "file": "resumes/resume-01.txt", "consent": true}
+  ],
+  "top5_relevance": [
+    {"profile_id": "profile-id", "snapshot_id": "snapshot-id", "relevant": true, "reviewer": "reviewer-id"}
+  ]
+}

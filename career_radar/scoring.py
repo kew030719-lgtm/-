@@ -107,10 +107,31 @@ def score_job(profile: CandidateProfile, job: JobSnapshot) -> JobScore:
         preference_parts.append(100 if profile.work_type_preference in job.work_type else 0)
     preference = sum(preference_parts) / len(preference_parts) if preference_parts else None
 
+    graduate_fit = None
+    graduate_advantages: list[str] = []
+    graduate_risks: list[str] = []
+    if profile.expected_graduation_year is not None:
+        if job.graduation_years:
+            graduate_fit = 100 if profile.expected_graduation_year in job.graduation_years else 0
+            if graduate_fit == 0:
+                graduate_risks.append(
+                    f"毕业年份可能不符合：岗位面向 {','.join(map(str, job.graduation_years))} 届"
+                )
+        elif job.recruitment_type in {"campus", "internship"}:
+            graduate_fit = 80
+        elif job.recruitment_type == "experienced":
+            graduate_fit = 20
+    if job.conversion_opportunity is True:
+        graduate_advantages.append("页面明确说明有实习转正机会")
+    if job.recruitment_batch:
+        graduate_advantages.append(f"招聘批次：{job.recruitment_batch}")
+    if job.experience_requirement_years and job.experience_requirement_years > 0:
+        graduate_risks.append(f"岗位明确要求 {job.experience_requirement_years:g} 年经验")
+
     components = ((skill, 40), (project, 25), (experience, 15), (education, 5), (preference, 15))
     known = [(value, weight) for value, weight in components if value is not None]
     total = sum(value * weight for value, weight in known) / sum(weight for _, weight in known) if known else 0
-    risks = [item for item in (experience_risk, education_risk, preference_risk) if item]
+    risks = [item for item in (experience_risk, education_risk, preference_risk) if item] + graduate_risks
     citations: list[Evidence] = []
     citations.extend(profile.evidence[:2])
     citations.extend(job.blocks[:2])
@@ -119,7 +140,8 @@ def score_job(profile: CandidateProfile, job: JobSnapshot) -> JobScore:
         project=None if project is None else round(project, 1),
         experience=None if experience is None else round(experience, 1),
         education=None if education is None else round(education, 1),
-        preference=None if preference is None else round(preference, 1), risks=risks,
+        preference=None if preference is None else round(preference, 1),
+        graduate_fit=graduate_fit, graduate_advantages=graduate_advantages, risks=risks,
         matched_skills=matched, missing_skills=missing,
         explanation="已知维度按固定权重重新归一；缺失信息显示为无法判断，不按零分处理。",
         citations=citations,

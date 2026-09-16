@@ -60,3 +60,18 @@
 .apply-done{color:#66b73d;font-size:13px}
 .apply-hint{margin:10px 0 0;font-size:12px;color:var(--muted,#6b7280);line-height:1.5}
 .apply-note{margin:8px 0 0;font-size:12px;color:#b45309;line-height:1.5}
+/* First-run model configuration. Kept self-contained so it can be removed or
+   redesigned without coupling it to the six-step workflow. */
+.setup-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: rgba(13, 18, 24, .72); backdrop-filter: blur(6px); }
+.setup-card { width: min(560px, 100%); padding: 28px; border-radius: 18px; background: #fff; color: #17202a; box-shadow: 0 24px 80px rgba(0,0,0,.28); }
+.setup-card label { display: grid; gap: 6px; margin: 14px 0; font-weight: 650; }
+.setup-card input, .application-stage select { width: 100%; border: 1px solid #cbd3dc; border-radius: 8px; padding: 10px 12px; font: inherit; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+.setup-ok, .graduate-fit { color: #18794e; }
+.setup-warning { color: #9a6700; }
+.setup-message { padding: 10px; border-radius: 8px; background: #f3f6f8; }
+.application-stage { display: grid; gap: 6px; margin-top: 12px; max-width: 220px; }
+.application-dates{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.application-dates label{display:grid;gap:5px;font-size:11px;font-weight:700}.application-dates input{padding:8px}
+@media(min-width:901px){.preference-grid{grid-template-columns:2fr repeat(3,1fr)}}
+.local-controls{display:flex;align-items:center;gap:9px;font-size:11px}.local-controls button,.local-controls a{background:none;color:var(--muted);padding:4px;text-decoration:none}.local-controls button:hover,.local-controls a:hover{color:var(--blue)}
+@media(max-width:1050px){.local-controls{display:none}}

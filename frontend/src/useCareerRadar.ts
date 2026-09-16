@@ -12,6 +12,7 @@ import {
 } from './lib/urlState'
 import type {
   Application,
+  ApplicationStatus,
   Comparison,
   Conversation,
   InterviewPrep,
@@ -770,6 +771,23 @@ export function useCareerRadar() {
     [loadApplications, state.profile, toast],
   )
 
+  const setApplicationBoardStatus = useCallback(
+    async (
+      applicationId: string,
+      status: ApplicationStatus,
+      fields: { application_deadline?: string; reminder_at?: string } = {},
+    ) => {
+      try {
+        await patchJson<Application>(`/api/applications/${applicationId}`, { status, ...fields })
+        await loadApplications(state.profile?.profile_id)
+        toast('投递进度已更新')
+      } catch (error) {
+        toast((error as Error).message)
+      }
+    },
+    [loadApplications, state.profile, toast],
+  )
+
   // Load whatever exists as soon as a profile is in hand, so a reload shows the
   // applications that were already prepared.
   useEffect(() => {
@@ -777,6 +795,26 @@ export function useCareerRadar() {
     if (!profileId) return
     void loadApplications(profileId)
   }, [state.profile?.profile_id, loadApplications])
+
+  const remindedApplications = useRef(new Set<string>())
+  useEffect(() => {
+    const now = Date.now()
+    const threeDays = now + 3 * 24 * 60 * 60 * 1000
+    const terminal = new Set<ApplicationStatus>(['OFFER', 'REJECTED', 'SKIPPED'])
+    for (const application of state.applications) {
+      if (terminal.has(application.status) || remindedApplications.current.has(application.application_id)) continue
+      const deadline = application.application_deadline
+        ? new Date(`${application.application_deadline}T23:59:59`).getTime()
+        : Number.POSITIVE_INFINITY
+      const reminder = application.reminder_at
+        ? new Date(application.reminder_at).getTime()
+        : Number.POSITIVE_INFINITY
+      if (reminder <= now || deadline <= threeDays) {
+        remindedApplications.current.add(application.application_id)
+        toast(`${application.company} · ${application.title} 的投递截止时间临近`)
+      }
+    }
+  }, [state.applications, toast])
 
   const copyGreeting = useCallback(
     async (greeting: string) => {
@@ -988,6 +1026,7 @@ export function useCareerRadar() {
       clearInterviewPrep,
       startApplication,
       setApplicationStatus,
+      setApplicationBoardStatus,
       copyGreeting,
       loadApplications,
       submitTargetForm,
