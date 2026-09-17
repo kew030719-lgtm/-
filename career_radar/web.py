@@ -40,6 +40,7 @@ from .schemas import (
 )
 from .services import TaskQueue
 from .sites import SITES, CrawlError, cities_for, get_site, job_identity, site_for_url
+from .sites.base import role_search_terms
 from .tailoring import TailoringService, target_from_pasted, target_from_snapshot
 
 
@@ -540,15 +541,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for site_key in site_keys:
             adapter = get_site(site_key)
             for role in profile.selected_roles[:2]:
-                for city in profile.cities[:2]:
-                    for page in (1, 2):
-                        query = " ".join(role.keywords) or role.role
-                        try:
-                            url = adapter.search_url(query, city, page)
-                        except CrawlError:
-                            # This site does not serve that city; skip just this pair.
-                            continue
-                        searches.append({"url": url, "city": city, "kind": "search", "site": site_key})
+                for query in role_search_terms(role):
+                    for city in profile.cities[:2]:
+                        for page in (1, 2):
+                            try:
+                                url = adapter.search_url(query, city, page)
+                            except CrawlError:
+                                # This site does not serve that city; skip just this pair.
+                                continue
+                            searches.append({"url": url, "city": city, "kind": "search", "site": site_key})
         if not searches:
             raise HTTPException(422, "所选站点都不支持当前城市")
         database.update_task(run_id, status="RUNNING", message="浏览器助手已接单，正在自动搜索岗位")
@@ -600,7 +601,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             links = adapter.parse_search_page(body.html, body.url)
             if not links and not any(word in body.html for word in ("暂无相关职位", "没有找到相关职位", "没有找到")):
-                raise CrawlError("搜索页未加载、需要登录或结构无法识别，请检查采集标签页")
+                raise CrawlError("搜索页已加载，但没有识别到岗位卡片；可能搜索词无结果或页面结构已变化")
             return {"links": links}
         except (CrawlError, KeyError) as exc:
             raise HTTPException(422, str(exc)) from exc

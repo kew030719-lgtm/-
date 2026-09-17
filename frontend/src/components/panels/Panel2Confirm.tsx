@@ -187,7 +187,7 @@ export default function Panel2Confirm({
                 className="keywords"
                 type="text"
                 value={card.keywords}
-                aria-label="搜索关键词"
+                aria-label="大模型生成的招聘网站搜索名称"
                 onChange={(event) =>
                   setCards((current) =>
                     current.map((item, i) =>

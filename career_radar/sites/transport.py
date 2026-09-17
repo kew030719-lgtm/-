@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 import httpx
 
 from ..schemas import JobSnapshot, RoleRecommendation
-from .base import CrawlError, NeedsManualInput, SiteAdapter
+from .base import CrawlError, NeedsManualInput, SiteAdapter, role_search_terms
 
 # A headless browser announcing itself as HeadlessChrome is served anti-bot
 # challenge pages by several boards: 智联 answers the default Playwright UA with
@@ -146,10 +146,10 @@ class SiteCrawler:
         seen_urls: set[str] = set()
         seen_platform: set[str] = set()
         seen_hashes: set[str] = set()
-        combinations = max(1, len(roles) * len(cities) * 2)
+        role_queries = [(role, query) for role in roles for query in role_search_terms(role)]
+        combinations = max(1, len(role_queries) * len(cities) * 2)
         step = 0
-        for role in roles:
-            query = role.keywords[0] if role.keywords else role.role
+        for role, query in role_queries:
             for city in cities:
                 for page_number in (1, 2):
                     if len(snapshots) >= self.max_jobs:

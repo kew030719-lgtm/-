@@ -351,6 +351,8 @@ evidence_ids 必须覆盖打招呼语里的每一项事实：提到某项技能�
     async def recommend_roles(self, profile: CandidateProfile) -> CandidateProfile:
         prompt = """根据候选人证据推荐恰好 3 个岗位方向。返回 JSON 数组，每项字段：
 role, keywords(1-4个), confidence(高/中/低), rationale, strengths, gaps, citations。
+role 必须是招聘网站上常见、可直接搜索的简短岗位名称。
+keywords 必须是 1-4 个可分别直接搜索的替代岗位名称，每项都是完整短语；不要输出技能清单，也不要把多个技术词拼成一个查询。
 citations 中每项必须逐字复制给定 evidence 的 source_type/source_id/block_id/quote。
 候选人资料：\n""" + json.dumps({
             "skills": profile.skills, "experience_years": profile.experience_years,

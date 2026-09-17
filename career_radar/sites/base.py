@@ -22,11 +22,27 @@ from uuid import uuid4
 from bs4 import BeautifulSoup
 
 from ..graduate import extract_graduate_metadata
-from ..schemas import Evidence, JobSnapshot
+from ..schemas import Evidence, JobSnapshot, RoleRecommendation
 
 
 class CrawlError(RuntimeError):
     pass
+
+
+def role_search_terms(role: RoleRecommendation, limit: int = 2) -> list[str]:
+    """Turn the model's role recommendation into independent board queries."""
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in (role.role, *role.keywords):
+        term = clean_text(value)
+        key = term.casefold()
+        if not term or key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+    return terms
 
 
 class NeedsManualInput(CrawlError):
