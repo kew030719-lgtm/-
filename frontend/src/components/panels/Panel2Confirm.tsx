@@ -46,28 +46,19 @@ export default function Panel2Confirm({
     setGraduationYear(profile.expected_graduation_year == null ? '' : String(profile.expected_graduation_year))
   }, [profile])
 
-  // Default to the first site only: crawling several boards multiplies the run's
-  // wall-clock and they share one job cap, so opting in should be deliberate.
+  // The product flow runs one board at a time. Selecting another board replaces
+  // the previous choice, so the browser never starts at an unexpected site.
   useEffect(() => {
     const enabled = sites.filter((site) => site.enabled).map((site) => site.key)
     if (!enabled.length) return
     setSelectedSites((current) => {
-      const kept = current.filter((key) => enabled.includes(key))
-      return kept.length ? kept : [enabled[0]]
+      const kept = current.find((key) => enabled.includes(key))
+      return [kept ?? enabled[0]]
     })
   }, [sites])
 
   const toggleSite = (key: string) => {
-    setSelectedSites((current) => {
-      if (current.includes(key)) {
-        if (current.length === 1) {
-          onToast('请至少选择一个招聘平台')
-          return current
-        }
-        return current.filter((item) => item !== key)
-      }
-      return [...current, key]
-    })
+    setSelectedSites([key])
   }
 
   const strip = [
@@ -149,12 +140,12 @@ export default function Panel2Confirm({
         }}
       >
         <fieldset className="site-picker">
-          <legend>抓取平台 <small>可多选</small></legend>
+          <legend>抓取平台 <small>单选</small></legend>
           <div className="chips" id="site-options">
             {sites.filter((site) => site.enabled).map((site) => (
               <label key={site.key}>
                 <input
-                  type="checkbox"
+                  type="radio"
                   name="sites"
                   value={site.key}
                   checked={selectedSites.includes(site.key)}
@@ -164,7 +155,7 @@ export default function Panel2Confirm({
               </label>
             ))}
           </div>
-          <p className="site-note">不同平台的页面结构各不相同，采集速度按所选站点中最保守的一个执行。</p>
+          <p className="site-note">每次任务只采集一个平台；切换平台会替换当前选择。</p>
         </fieldset>
         <div id="role-cards" className="role-cards">
           {cards.map((card, index) => (

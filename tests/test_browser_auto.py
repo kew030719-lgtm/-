@@ -3,13 +3,41 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
-
 from test_api_flow import RESUME, settings, wait_task
+
+from career_radar.sites import get_site
 from career_radar.web import create_app
 
 
 def test_auto_discovery_lifecycle(tmp_path):
     asyncio.run(lifecycle(tmp_path))
+
+
+def test_selected_site_is_the_only_site_in_the_browser_queue(tmp_path):
+    asyncio.run(selected_site_queue(tmp_path))
+
+
+async def selected_site_queue(tmp_path):
+    app = create_app(settings(tmp_path))
+    async with (
+      app.router.lifespan_context(app),
+      httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+    ):
+        profile = (await client.post("/api/resumes", json={"text": RESUME})).json()
+        pid = profile["profile_id"]
+        await client.put(
+            f"/api/profiles/{pid}",
+            json={"selected_roles": profile["recommendations"][:1], "cities": ["北京"]},
+        )
+        for site_key in ("boss", "zhaopin", "job51"):
+            run = (await client.post(
+                "/api/discovery-runs",
+                json={"profile_id": pid, "sites": [site_key]},
+            )).json()["task_id"]
+            plan = (await client.post(f"/api/browser-runs/{run}/start")).json()
+            allowed_hosts = get_site(site_key).hosts
+            assert plan["queue"]
+            assert all(urlsplit(item["url"]).hostname in allowed_hosts for item in plan["queue"])
 
 
 async def lifecycle(tmp_path):
