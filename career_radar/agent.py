@@ -345,13 +345,19 @@ resume_entries，且 bullets 只能引用该经历自己的 evidence_ids。不�
                     raw["headline"] = parts[1]
                 elif len(parts) == 3 and parts[0] in {"SUMMARY", "SKILL"}:
                     item = {"text": parts[2], "evidence_ids": [value.strip() for value in parts[1].split(",") if value.strip()]}
-                    raw["summary" if parts[0] == "SUMMARY" else "skills"].append(item)
+                    destination = raw["summary" if parts[0] == "SUMMARY" else "skills"]
+                    limit = 2 if parts[0] == "SUMMARY" else 8
+                    if len(destination) < limit:
+                        destination.append(item)
                 elif len(parts) == 4 and parts[0] == "ENTRY":
-                    entry = entries.setdefault(parts[1], {"entry_id": parts[1], "bullets": []})
-                    entry["bullets"].append({
-                        "text": parts[3],
-                        "evidence_ids": [value.strip() for value in parts[2].split(",") if value.strip()],
-                    })
+                    entry = entries.get(parts[1])
+                    if entry is None and len(entries) < 10:
+                        entry = entries.setdefault(parts[1], {"entry_id": parts[1], "bullets": []})
+                    if entry is not None and len(entry["bullets"]) < 4:
+                        entry["bullets"].append({
+                            "text": parts[3],
+                            "evidence_ids": [value.strip() for value in parts[2].split(",") if value.strip()],
+                        })
             raw["entries"] = list(entries.values())
             version = normalize_draft(ResumeDraftOutput.model_validate(raw))
             if validator:

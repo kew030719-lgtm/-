@@ -417,12 +417,16 @@ def test_model_tailoring_preserves_cited_entries_and_runs_quality_review(tmp_pat
                 ), [], "langgraph"
             assert output_type is ResumeWritingOutput
             writer_calls += 1
-            return ResumeWritingOutput(text="\n".join([
+            lines = [
                 f"HEADLINE|{target.title}",
                 f"SUMMARY|{source.block_id}|{source.quote}",
                 f"SKILL|{source.block_id}|Python",
-                f"ENTRY|{source_entry.entry_id}|{source.block_id}|{source.quote}",
-            ])), [], "langgraph"
+            ]
+            lines.extend(
+                f"ENTRY|{source_entry.entry_id}|{source.block_id}|{source.quote}（要点{label}）"
+                for label in "甲乙丙丁戊"
+            )
+            return ResumeWritingOutput(text="\n".join(lines)), [], "langgraph"
 
         app.state.agent._run_structured = fake_run
         validation_calls = 0
@@ -441,6 +445,7 @@ def test_model_tailoring_preserves_cited_entries_and_runs_quality_review(tmp_pat
         assert version.skills[0].text == "Python"
         assert version.sections[0].entries[0].entry_id == source_entry.entry_id
         assert version.sections[0].entries[0].evidence_ids == [source.block_id]
+        assert len(version.sections[0].entries[0].bullets) == 4
         assert version.quality_report.passed is True
         assert writer_calls == 3 and validation_calls == 3
         from career_radar.agent import (
