@@ -549,7 +549,10 @@ export function useCareerRadar() {
           return
         }
         patch({ tailoringBusy: false })
-        if (task.status !== 'SUCCEEDED') throw new Error(task.error || task.message)
+        if (task.status !== 'SUCCEEDED') {
+          await loadTailoring(tailoringId)
+          throw new Error(task.error || task.message)
+        }
         await loadTailoring(tailoringId)
         toast('定向简历已生成')
       } catch (error) {

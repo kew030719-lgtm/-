@@ -263,6 +263,23 @@ export default function Panel6Tailoring(props: Props) {
           </label>
         </div>
 
+        {edited?.quality_report ? (
+          <div className="export-card">
+            <b>{edited.quality_report.passed ? '质量检查已通过' : '质量检查未通过'}</b>
+            <p>
+              岗位相关性 {edited.quality_report.relevance_score} ·
+              具体性 {edited.quality_report.specificity_score} ·
+              结构 {edited.quality_report.structure_score} ·
+              简洁度 {edited.quality_report.conciseness_score} ·
+              证据覆盖 {edited.quality_report.evidence_coverage}% ·
+              预计 {edited.quality_report.estimated_pages} 页
+            </p>
+            {edited.quality_report.uncovered_requirements.length ? (
+              <p>尚无证据覆盖：{edited.quality_report.uncovered_requirements.join('、')}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {edited ? (
           <div className={`resume-preview ${resumeTemplate}`} id="resume-preview">
             <div className="resume-contact">
@@ -371,6 +388,11 @@ export default function Panel6Tailoring(props: Props) {
 
       {tailoring && tailoring.status === 'FAILED_VALIDATION' && tailoring.error ? (
         <p className="login-status" onClick={() => onToast(tailoring.error ?? '')}>{tailoring.error}</p>
+      ) : null}
+      {tailoring && tailoring.status === 'FAILED' && tailoring.error ? (
+        <p className="login-status" onClick={() => onToast(tailoring.error ?? '')}>
+          {tailoring.error}。可修改上方补充事实后再次生成。
+        </p>
       ) : null}
     </section>
   )

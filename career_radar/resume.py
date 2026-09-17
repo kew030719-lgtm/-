@@ -10,7 +10,7 @@ from uuid import uuid4
 from docx import Document
 from pypdf import PdfReader
 
-from .schemas import CandidateContact, CandidateProfile, Evidence
+from .schemas import CandidateContact, CandidateProfile, Evidence, ResumeSourceEntry
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -34,6 +34,10 @@ GENERIC_NAME_LABELS = {
 
 
 class ResumeError(ValueError):
+    pass
+
+
+class ResumeGenerationError(ResumeError):
     pass
 
 
@@ -100,6 +104,70 @@ def _section_for(line: str, current: str) -> str:
     return current
 
 
+SECTION_LABELS = {
+    "教育", "教育经历", "education", "技能", "专业技能", "技术栈", "skills",
+    "项目", "项目经历", "projects", "经历", "工作经历", "实习经历",
+    "experience", "work experience",
+}
+DATE_RANGE_RE = re.compile(
+    r"(?:19|20)\d{2}(?:[./年-]\d{1,2}月?)?\s*(?:[-—至~～]|到)\s*"
+    r"(?:(?:19|20)\d{2}(?:[./年-]\d{1,2}月?)?|至今|现在)"
+)
+
+
+def _looks_entry_heading(text: str, section: str) -> bool:
+    value = text.strip(" ：:")
+    if value.lower() in SECTION_LABELS or len(value) > 80:
+        return False
+    if DATE_RANGE_RE.search(value):
+        return True
+    if section == "教育" and any(token in value for token in ("大学", "学院", "学校", "本科", "硕士", "博士", "大专")):
+        return True
+    if section == "经历" and any(token in value for token in ("公司", "研究院", "中心", "工程师", "实习生", "负责人")):
+        return True
+    if section == "项目" and ("项目" in value or value.endswith(("系统", "平台", "应用", "服务"))):
+        return True
+    return False
+
+
+def _resume_entries(evidence: list[Evidence]) -> list[ResumeSourceEntry]:
+    by_section: dict[str, list[Evidence]] = {}
+    for item in evidence:
+        if item.quote.strip(" ：:").lower() not in SECTION_LABELS:
+            by_section.setdefault(item.section or "概览", []).append(item)
+    kinds = {"经历": "experience", "项目": "project", "教育": "education", "技能": "skills"}
+    entries: list[ResumeSourceEntry] = []
+    for section, items in by_section.items():
+        kind = kinds.get(section, "other")
+        groups: list[list[Evidence]] = []
+        for item in items:
+            if not groups or (kind in {"experience", "project", "education"} and _looks_entry_heading(item.quote, section)):
+                groups.append([item])
+            else:
+                groups[-1].append(item)
+        for group in groups:
+            first = group[0].quote.strip()
+            # Headings are copied into the final resume and therefore must be an
+            # exact, citable fragment rather than a synthesized section label.
+            heading = first
+            date = DATE_RANGE_RE.search(first)
+            organization = ""
+            if kind in {"experience", "education"}:
+                organization = next((part.strip() for part in re.split(r"[|｜·]", first)
+                                     if any(suffix in part for suffix in ("公司", "大学", "学院", "研究院", "学校"))), "")
+            role = next((token for token in ("后端工程师", "开发工程师", "算法工程师", "数据工程师", "实习生", "负责人")
+                         if token in first), "")
+            digest = hashlib.sha256("\0".join(item.block_id for item in group).encode()).hexdigest()[:12]
+            entries.append(ResumeSourceEntry(
+                entry_id=f"source-entry-{digest}", kind=kind, heading=heading,
+                organization=organization, role=role,
+                date_range=date.group(0) if date else "",
+                evidence_ids=[item.block_id for item in group],
+                original_bullets=[item.quote for item in group],
+            ))
+    return entries
+
+
 def build_profile(text: str, profile_id: str | None = None) -> CandidateProfile:
     cleaned = normalize_resume_text(text)
     profile_id = profile_id or f"profile_{uuid4().hex[:12]}"
@@ -124,7 +192,7 @@ def build_profile(text: str, profile_id: str | None = None) -> CandidateProfile:
     education = next((degree for degree in ("博士", "硕士", "本科", "大专") if degree in cleaned), None)
     return CandidateProfile(
         profile_id=profile_id, skills=skills, experience_years=experience_years,
-        education=education, evidence=evidence,
+        education=education, evidence=evidence, resume_entries=_resume_entries(evidence),
     )
 
 
@@ -132,6 +200,7 @@ def extract_candidate_contact(profile: CandidateProfile) -> CandidateContact:
     """Split contact data from model-visible evidence while retaining useful text."""
     contact = CandidateContact(profile_id=profile.profile_id)
     public: list[Evidence] = []
+    remapped_ids: dict[str, str | None] = {}
     for index, item in enumerate(profile.evidence):
         quote = item.quote
         phone = PHONE_RE.search(quote)
@@ -153,6 +222,7 @@ def extract_candidate_contact(profile: CandidateProfile) -> CandidateContact:
         )
         if is_name_candidate:
             contact.name = quote.strip()
+            remapped_ids[item.block_id] = None
             continue
         sanitized = EMAIL_RE.sub("", PHONE_RE.sub("", quote))
         if location:
@@ -161,12 +231,25 @@ def extract_candidate_contact(profile: CandidateProfile) -> CandidateContact:
         sanitized = re.sub(r"\s*[|｜·]\s*[|｜·]*\s*", " | ", sanitized).strip(" |｜·，,；;")
         if sanitized:
             stable = hashlib.sha256(f"{item.section}\0{sanitized}".encode()).hexdigest()[:12]
+            new_id = f"resume-{item.section}-{stable}"
+            remapped_ids[item.block_id] = new_id
             public.append(item.model_copy(update={
                 "quote": sanitized,
-                "block_id": f"resume-{item.section}-{stable}",
+                "block_id": new_id,
                 "provenance": item.provenance or "uploaded_resume",
             }))
+        else:
+            remapped_ids[item.block_id] = None
     profile.evidence = public
+    available = {item.block_id: item.quote for item in public}
+    entries = []
+    for entry in profile.resume_entries:
+        ids = [remapped_ids.get(item, item) for item in entry.evidence_ids]
+        entry.evidence_ids = [item for item in ids if item in available]
+        entry.original_bullets = [available[item] for item in entry.evidence_ids]
+        if entry.evidence_ids:
+            entries.append(entry)
+    profile.resume_entries = entries
     return contact
 
 

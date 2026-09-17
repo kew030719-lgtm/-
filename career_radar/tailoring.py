@@ -16,12 +16,12 @@ from docx.shared import Inches, Pt, RGBColor
 from .agent import AgentService, _extract_json
 from .database import Database, now_iso
 from .resume import (
-    EMAIL_RE, PHONE_RE, SKILLS, ResumeError, extract_candidate_contact,
+    EMAIL_RE, PHONE_RE, SKILLS, ResumeError, ResumeGenerationError, extract_candidate_contact,
     sanitize_candidate_contact,
 )
 from .schemas import (
     CandidateContact, CandidateProfile, Evidence, JobSnapshot, ResumeBullet,
-    ResumeDraftVersion, ResumeEntry, ResumeExport, ResumeSection, ResumeTailoring,
+    ResumeDraftVersion, ResumeEntry, ResumeExport, ResumeSection, ResumeSourceEntry, ResumeTailoring,
     SupplementalEvidence, TailoringQuestion, TargetJob,
 )
 
@@ -176,26 +176,79 @@ def _public_profile(profile: CandidateProfile, contact: CandidateContact) -> Can
         PHONE_RE.search(item.quote) or EMAIL_RE.search(item.quote) or
         any(secret in item.quote for secret in private)
     )]
+    safe = {item.block_id: item.quote for item in value.evidence}
+    entries = []
+    for entry in value.resume_entries:
+        entry.evidence_ids = [item for item in entry.evidence_ids if item in safe]
+        entry.original_bullets = [safe[item] for item in entry.evidence_ids]
+        if entry.evidence_ids:
+            entries.append(entry)
+    value.resume_entries = entries
     return value
 
 
 def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile) -> None:
     sources = {item.block_id: item for item in profile.evidence}
-    for bullet in _all_bullets(version):
-        if not bullet.evidence_ids or any(evidence_id not in sources for evidence_id in bullet.evidence_ids):
-            raise ResumeError(f"简历内容引用了无效证据：{bullet.bullet_id}")
-        quotes = " ".join(sources[item].quote for item in bullet.evidence_ids)
-        if any(phrase in bullet.text.lower() for phrase in ("温馨提示", "简历模板", "虚构示例", "请根据实际情况", "仅供参考")):
-            raise ResumeError("简历内容包含模板提示语")
-        for number in re.findall(r"\d+(?:\.\d+)?%?", bullet.text):
+
+    def validate_text(text: str, evidence_ids: list[str], label: str) -> None:
+        if not evidence_ids or any(evidence_id not in sources for evidence_id in evidence_ids):
+            raise ResumeError(f"简历内容引用了无效证据：{label}")
+        quotes = " ".join(sources[item].quote for item in evidence_ids)
+        for number in re.findall(r"\d+(?:\.\d+)?%?", text):
             if number not in quotes:
                 raise ResumeError(f"简历内容出现未经证实的数字：{number}")
-        for entity in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{2,30}(?:有限责任公司|有限公司|大学|学院|研究院)", bullet.text):
+        for entity in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{2,30}(?:有限责任公司|有限公司|大学|学院|研究院)", text):
             if entity not in quotes:
                 raise ResumeError(f"简历内容出现未经证实的机构：{entity}")
         for token, display in SKILLS.items():
-            if token in bullet.text.lower() and token not in quotes.lower():
+            if token in text.lower() and token not in quotes.lower():
                 raise ResumeError(f"简历内容出现未经证实的技能：{display}")
+
+    for bullet in _all_bullets(version):
+        validate_text(bullet.text, bullet.evidence_ids, bullet.bullet_id)
+        if any(phrase in bullet.text.lower() for phrase in ("温馨提示", "简历模板", "虚构示例", "请根据实际情况", "仅供参考")):
+            raise ResumeError("简历内容包含模板提示语")
+    for section in version.sections:
+        for entry in section.entries:
+            validate_text(" ".join(filter(None, [entry.heading, entry.subheading, entry.date_range])),
+                          entry.evidence_ids, entry.entry_id)
+            entry_quotes = " ".join(sources[item].quote for item in entry.evidence_ids)
+            for metadata in (entry.heading, entry.subheading, entry.date_range):
+                if metadata and metadata not in entry_quotes:
+                    raise ResumeError(f"简历条目出现未经证实的标题或日期：{metadata}")
+            allowed = set(entry.evidence_ids)
+            if any(not set(bullet.evidence_ids).issubset(allowed) for bullet in entry.bullets):
+                raise ResumeError(f"简历条目混入了其他经历的事实：{entry.heading}")
+
+
+def assess_draft_quality(version: ResumeDraftVersion, target: TargetJob) -> None:
+    bullets = _all_bullets(version)
+    normalized = [re.sub(r"\W+", "", item.text).lower() for item in bullets]
+    duplicates = len(normalized) - len(set(normalized))
+    text = " ".join(item.text for item in bullets)
+    characters = len(text) + sum(len(entry.heading + entry.subheading + entry.date_range)
+                                 for section in version.sections for entry in section.entries)
+    report = version.quality_report
+    report.evidence_coverage = 100 if bullets and all(item.evidence_ids for item in bullets) else 0
+    report.duplicate_count = duplicates
+    report.estimated_pages = round(max(0.5, characters / 1600), 1)
+    report.uncovered_requirements = [skill for skill in target.required_skills if skill.lower() not in text.lower()]
+    issues = list(dict.fromkeys(report.issues))
+    if duplicates:
+        issues.append(f"存在 {duplicates} 条重复内容")
+    if report.estimated_pages > 1.2:
+        issues.append("内容超过默认一页篇幅")
+    if not version.sections or not bullets:
+        issues.append("简历缺少可用的经历内容")
+    report.issues = list(dict.fromkeys(issues))
+    report.passed = bool(
+        report.passed and report.evidence_coverage == 100 and not duplicates
+        and report.estimated_pages <= 1.2 and version.sections and bullets
+        and min(report.relevance_score, report.specificity_score,
+                report.structure_score, report.conciseness_score) >= 70
+    )
+    if not report.passed:
+        raise ResumeError("定向简历未通过质量检查：" + "；".join(report.issues[:5] or ["模型评分未达到 70 分"]))
 
 
 class TailoringService:
@@ -224,8 +277,11 @@ class TailoringService:
         tailoring = self.database.get_tailoring(tailoring_id)
         if not tailoring:
             raise ResumeError("定向简历任务不存在")
-        if tailoring.status not in {"COLLECTING", "READY"}:
+        if tailoring.status not in {"COLLECTING", "READY", "FAILED", "FAILED_VALIDATION"}:
             raise ResumeError("当前状态不能修改追问答案")
+        if tailoring.status in {"FAILED", "FAILED_VALIDATION"}:
+            tailoring.task_id = None
+            tailoring.error = None
         valid_ids = {question.question_id for question in tailoring.questions}
         if set(answers) - valid_ids:
             raise ResumeError("包含不属于当前任务的追问")
@@ -261,6 +317,11 @@ class TailoringService:
                     source_type="resume", source_id=profile.profile_id, block_id=evidence_id,
                     quote=question.answer, section="用户补充", provenance="user_confirmed",
                 ))
+                profile.resume_entries.append(ResumeSourceEntry(
+                    entry_id=f"source-entry-{evidence_id}", kind="other",
+                    heading="用户确认的补充经历", evidence_ids=[evidence_id],
+                    original_bullets=[question.answer],
+                ))
                 existing.add(evidence_id)
         self.database.save_profile(profile)
         return profile
@@ -284,22 +345,35 @@ class TailoringService:
         latest = self.database.get_latest_draft(draft_id)
         if latest:
             version.version = latest.version + 1
-        if self.agent.settings.api_key:
-            try:
-                version = await self.agent.tailor_resume(public_profile, target, tailoring, contact, version)
-            except Exception:
-                pass
+        if not self.agent.settings.api_key:
+            tailoring.status = "FAILED"
+            tailoring.error = "尚未配置可用的大模型，已停止生成，未展示低质量整理版"
+            self.database.save_tailoring(tailoring)
+            raise ResumeGenerationError(tailoring.error)
+        try:
+            version = await self.agent.tailor_resume(
+                public_profile, target, tailoring, contact, version,
+                validator=lambda draft: validate_draft(draft, profile),
+            )
+        except Exception as exc:
+            tailoring.status = "FAILED"
+            reason = str(exc).strip() or ("请求超时" if isinstance(exc, TimeoutError) else type(exc).__name__)
+            tailoring.error = f"大模型生成或质量返工失败：{reason}"
+            self.database.save_tailoring(tailoring)
+            raise ResumeGenerationError(tailoring.error) from exc
         try:
             validate_draft(version, profile)
-        except ResumeError:
+            assess_draft_quality(version, target)
+        except ResumeError as exc:
             version.validation_status = "FAILED_VALIDATION"
             self.database.save_draft_version(version)
             tailoring.status = "FAILED_VALIDATION"
-            tailoring.draft_id = draft_id
+            tailoring.error = str(exc)
             self.database.save_tailoring(tailoring)
             raise
         self.database.save_draft_version(version)
         tailoring.status = "SUCCEEDED"
+        tailoring.error = None
         tailoring.draft_id = draft_id
         self.database.save_tailoring(tailoring)
         return version

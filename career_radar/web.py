@@ -899,7 +899,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "定向简历任务不存在")
         if tailoring.task_id:
             task = database.get_task(tailoring.task_id)
-            return {"task_id": tailoring.task_id, "status": task["status"], "draft_id": tailoring.draft_id}
+            if task and task["status"] not in {"FAILED", "FAILED_VALIDATION"}:
+                return {"task_id": tailoring.task_id, "status": task["status"], "draft_id": tailoring.draft_id}
+            tailoring.task_id = None
+            tailoring.status = "READY"
+            tailoring.error = None
         if tailoring.status != "READY":
             raise HTTPException(409, "请先回答或跳过全部追问")
         task_id = f"task_{uuid4().hex[:12]}"

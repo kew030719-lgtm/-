@@ -1,0 +1,12 @@
+[
+  {"case_id":"graduate-01","resume":"计算机本科。项目：使用 Python、FastAPI 开发校园招聘分析接口并编写自动化测试。","job":{"title":"Python 后端工程师","requirements":["Python","FastAPI","自动化测试"]}},
+  {"case_id":"graduate-02","resume":"软件工程本科。项目：使用 React、TypeScript 完成课程管理前端。","job":{"title":"前端开发工程师","requirements":["React","TypeScript","前端工程化"]}},
+  {"case_id":"graduate-03","resume":"数据科学本科。项目：使用 Python、Pandas 清洗公开数据并制作分析报告。","job":{"title":"数据分析师","requirements":["Python","Pandas","数据分析"]}},
+  {"case_id":"graduate-04","resume":"人工智能硕士。项目：构建 RAG 问答原型，完成检索与回答效果测试。","job":{"title":"大模型应用工程师","requirements":["RAG","LLM","效果评测"]}},
+  {"case_id":"graduate-05","resume":"网络工程本科。实习：维护 Linux 服务并使用 Docker 完成应用部署。","job":{"title":"运维开发工程师","requirements":["Linux","Docker","部署"]}},
+  {"case_id":"graduate-06","resume":"信息管理本科。项目：使用 SQL 和 MySQL 完成销售数据查询与报表。","job":{"title":"数据工程师","requirements":["SQL","MySQL","数据建模"]}},
+  {"case_id":"graduate-07","resume":"计算机本科。项目：使用 Playwright 编写网页采集与回归测试工具。","job":{"title":"测试开发工程师","requirements":["Playwright","自动化测试","Python"]}},
+  {"case_id":"graduate-08","resume":"电子信息本科。项目：使用 Python 实现传感器数据处理服务。","job":{"title":"Python 开发工程师","requirements":["Python","数据处理","接口开发"]}},
+  {"case_id":"graduate-09","resume":"软件工程本科。项目：使用 Django 和 PostgreSQL 开发社团管理系统。","job":{"title":"Web 后端工程师","requirements":["Django","PostgreSQL","Web API"]}},
+  {"case_id":"graduate-10","resume":"统计学硕士。项目：使用 NumPy、Pandas 完成实验数据分析。","job":{"title":"数据分析工程师","requirements":["NumPy","Pandas","统计分析"]}}
+]

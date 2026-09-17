@@ -390,7 +390,7 @@ def read_tailoring_context(ctx: RunContext[ToolContext], tailoring_id: str) -> d
     )[:36]
     public_profile = {
         key: profile.get(key) for key in
-        ("profile_id", "skills", "experience_years", "education", "confirmed")
+        ("profile_id", "skills", "experience_years", "education", "confirmed", "resume_entries")
     }
     public_profile["evidence"] = ranked_evidence
     public_target = {

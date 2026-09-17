@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -7,9 +8,9 @@ import pytest
 from docx import Document
 
 from career_radar.config import Settings
-from career_radar.sites import FetchResult
 from career_radar.resume import ResumeError, build_profile, extract_candidate_contact
 from career_radar.schemas import Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion
+from career_radar.sites import FetchResult
 from career_radar.tailoring import _fallback_draft, _public_profile, validate_draft
 from career_radar.web import create_app
 
@@ -33,6 +34,21 @@ def settings(tmp_path: Path, api_key: str = "") -> Settings:
         model_base_url="https://example.invalid/v1", model_name="test", api_key=api_key,
         crawl_delay_seconds=0, crawl_max_jobs=3,
     )
+
+
+def install_successful_tailor(app):
+    app.state.agent.settings.api_key = "configured-for-test"
+
+    async def fake_tailor(_profile, _target, _tailoring, _contact, fallback, **_kwargs):
+        fallback.source = "langgraph"
+        fallback.quality_report.relevance_score = 90
+        fallback.quality_report.specificity_score = 90
+        fallback.quality_report.structure_score = 90
+        fallback.quality_report.conciseness_score = 90
+        fallback.quality_report.passed = True
+        return fallback
+
+    app.state.agent.tailor_resume = fake_tailor
 
 
 async def wait_task(client: httpx.AsyncClient, task_id: str):
@@ -73,6 +89,7 @@ def test_target_tailoring_questions_confirm_and_version_history(tmp_path):
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                 profile, _, snapshot = await setup_profile_job(client, app)
+                install_successful_tailor(app)
                 profile_id = profile["profile_id"]
                 assert all("13800138000" not in item["quote"] for item in profile["evidence"])
                 contact = app.state.database.get_contact(profile_id)
@@ -212,7 +229,74 @@ Python FastAPI 后端开发
     assert contact.email == "candidate@example.com"
 
 
-def test_model_tailoring_normalizes_fields_and_flattens_uncited_entries(tmp_path):
+def test_resume_parser_keeps_projects_as_separate_evidence_units():
+    profile = build_profile("""李同学
+项目经历
+校园招聘分析平台 2025.01-2025.04
+使用 Python 和 FastAPI 开发岗位匹配接口
+课程管理系统 2024.03-2024.06
+使用 JavaScript 实现课程检索页面
+教育经历
+示例大学 2022.09-2026.06
+计算机科学 本科
+""")
+    projects = [item for item in profile.resume_entries if item.kind == "project"]
+    assert len(projects) == 2
+    assert projects[0].heading.startswith("校园招聘分析平台")
+    assert projects[1].heading.startswith("课程管理系统")
+    assert set(projects[0].evidence_ids).isdisjoint(projects[1].evidence_ids)
+
+
+def test_tailoring_evaluation_set_contains_ten_anonymized_graduate_cases():
+    cases = json.loads((Path(__file__).parents[1] / "evaluation" / "tailoring_cases.json").read_text())
+    assert len(cases) >= 10
+    assert len({item["case_id"] for item in cases}) == len(cases)
+    assert all(item["resume"] and item["job"]["requirements"] for item in cases)
+
+
+def test_missing_model_fails_without_exposing_fallback_and_can_retry(tmp_path):
+    async def run():
+        app = create_app(settings(tmp_path))
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                profile, _, snapshot = await setup_profile_job(client, app)
+                target_id = (await client.post("/api/target-jobs", json={
+                    "profile_id": profile["profile_id"], "source_type": "snapshot",
+                    "snapshot_id": snapshot.snapshot_id,
+                })).json()["target_job_id"]
+                tailoring = (await client.post("/api/resume-tailorings", json={
+                    "profile_id": profile["profile_id"], "target_job_id": target_id,
+                })).json()
+                answers = {item["question_id"]: None for item in tailoring["questions"]}
+                await client.post(
+                    f"/api/resume-tailorings/{tailoring['tailoring_id']}/answers", json={"answers": answers},
+                )
+                first = (await client.post(
+                    f"/api/resume-tailorings/{tailoring['tailoring_id']}/confirm",
+                )).json()["task_id"]
+                failed_task = await wait_task(client, first)
+                failed = (await client.get(
+                    f"/api/resume-tailorings/{tailoring['tailoring_id']}",
+                )).json()["tailoring"]
+                assert failed_task["status"] == "FAILED"
+                assert failed["status"] == "FAILED" and failed["draft_id"] is None
+                assert "未展示低质量整理版" in failed["error"]
+
+                install_successful_tailor(app)
+                ready = (await client.post(
+                    f"/api/resume-tailorings/{tailoring['tailoring_id']}/answers", json={"answers": answers},
+                )).json()
+                assert ready["status"] == "READY" and ready["task_id"] is None
+                second = (await client.post(
+                    f"/api/resume-tailorings/{tailoring['tailoring_id']}/confirm",
+                )).json()["task_id"]
+                assert second != first
+                assert (await wait_task(client, second))["status"] == "SUCCEEDED"
+
+    asyncio.run(run())
+
+
+def test_model_tailoring_preserves_cited_entries_and_runs_quality_review(tmp_path):
     async def run():
         app = create_app(settings(tmp_path))
         app.state.database.initialize()
@@ -229,27 +313,55 @@ def test_model_tailoring_normalizes_fields_and_flattens_uncited_entries(tmp_path
             )
         public = _public_profile(profile, contact)
         fallback = _fallback_draft(public, contact, target, tailoring, "draft_model_tailor")
-        source = public.evidence[0]
+        source_entry = next(item for item in public.resume_entries if item.kind == "skills")
+        source = next(item for item in public.evidence if item.block_id in source_entry.evidence_ids)
+        writer_calls = 0
 
-        async def fake_run(*_args, **_kwargs):
-            from career_radar.agent import ResumeDraftOutput
-            return ResumeDraftOutput.model_validate({
-                    "headline": target.title,
-                    "summary": [{"text": source.quote, "evidence_ids": [source.block_id], "provenance": "resume"}],
-                    "skills": [{"name": "Python", "evidence_ids": [source.block_id], "provenance": "resume"}],
-                    "sections": [{"title": "经历", "entries": [{
-                        "heading": "模型虚构公司", "date_range": "2099年",
-                        "bullets": [{"text": source.quote, "evidence_ids": [source.block_id], "provenance": "resume"}],
-                    }]}],
+        async def fake_run(_prompt, _task_id, output_type, **_kwargs):
+            nonlocal writer_calls
+            from career_radar.agent import (
+                ResumePlanOutput,
+                ResumeQualityReviewTextOutput,
+                ResumeWritingOutput,
+            )
+            if output_type is ResumePlanOutput:
+                return ResumePlanOutput.model_validate({
+                    "requirements": [{"requirement": "Python", "importance": 100,
+                                      "match": "strong", "evidence_ids": [source.block_id]}],
+                    "selected_entry_ids": [source_entry.entry_id], "strategy": "突出后端技能",
                 }), ["career_radar__read_tailoring_context"], "langgraph"
+            if output_type is ResumeQualityReviewTextOutput:
+                return ResumeQualityReviewTextOutput(
+                    text="SCORES|90|88|92|90\nPASS|true",
+                ), [], "langgraph"
+            assert output_type is ResumeWritingOutput
+            writer_calls += 1
+            return ResumeWritingOutput(text="\n".join([
+                f"HEADLINE|{target.title}",
+                f"SUMMARY|{source.block_id}|{source.quote}",
+                f"SKILL|{source.block_id}|Python",
+                f"ENTRY|{source_entry.entry_id}|{source.block_id}|{source.quote}",
+            ])), [], "langgraph"
 
         app.state.agent._run_structured = fake_run
-        version = await app.state.agent.tailor_resume(public, target, tailoring, contact, fallback)
+        validation_calls = 0
+
+        def validate_after_feedback(_version):
+            nonlocal validation_calls
+            validation_calls += 1
+            if validation_calls < 3:
+                raise ResumeError("需要消除跨经历事实")
+
+        version = await app.state.agent.tailor_resume(
+            public, target, tailoring, contact, fallback, validator=validate_after_feedback,
+        )
         assert version.source == "langgraph"
         assert version.summary[0].provenance == "uploaded_resume"
         assert version.skills[0].text == "Python"
-        assert version.sections[0].entries == []
-        assert version.sections[0].bullets
+        assert version.sections[0].entries[0].entry_id == source_entry.entry_id
+        assert version.sections[0].entries[0].evidence_ids == [source.block_id]
+        assert version.quality_report.passed is True
+        assert writer_calls == 3 and validation_calls == 3
 
     asyncio.run(run())
 
@@ -270,7 +382,10 @@ def test_failed_model_fact_is_saved_as_failed_validation_version(tmp_path):
                 tailoring.tailoring_id, {item.question_id: None for item in tailoring.questions},
             )
 
-        async def fake_tailor(_profile, _target, active, active_contact, fallback):
+        failed_draft = {}
+
+        async def fake_tailor(_profile, _target, active, active_contact, fallback, **_kwargs):
+            failed_draft["id"] = fallback.draft_id
             fallback.source = "langgraph"
             fallback.summary[0].text = "虚构将系统性能提升 99%"
             return fallback
@@ -280,7 +395,8 @@ def test_failed_model_fact_is_saved_as_failed_validation_version(tmp_path):
             await app.state.tailoring_service.generate(tailoring.tailoring_id)
         failed = app.state.database.get_tailoring(tailoring.tailoring_id)
         assert failed.status == "FAILED_VALIDATION"
-        version = app.state.database.get_latest_draft(failed.draft_id)
+        assert failed.draft_id is None, "an invalid first draft must not be displayed as the current resume"
+        version = app.state.database.get_latest_draft(failed_draft["id"])
         assert version.validation_status == "FAILED_VALIDATION"
 
     asyncio.run(run())
@@ -308,6 +424,7 @@ def test_docx_templates_are_readable(tmp_path):
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                 profile, _, snapshot = await setup_profile_job(client, app)
+                install_successful_tailor(app)
                 target = (await client.post("/api/target-jobs", json={
                     "profile_id": profile["profile_id"], "source_type": "snapshot", "snapshot_id": snapshot.snapshot_id,
                 })).json()["target_job"]
@@ -341,6 +458,7 @@ def test_export_api_creates_two_version_bound_artifacts(tmp_path, monkeypatch):
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                 profile, _, snapshot = await setup_profile_job(client, app)
+                install_successful_tailor(app)
                 target_id = (await client.post("/api/target-jobs", json={
                     "profile_id": profile["profile_id"], "source_type": "snapshot",
                     "snapshot_id": snapshot.snapshot_id,

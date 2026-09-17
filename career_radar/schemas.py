@@ -24,6 +24,17 @@ class Evidence(BaseModel):
     provenance: Literal["uploaded_resume", "user_confirmed", "user_edited", "job_snapshot"] | None = None
 
 
+class ResumeSourceEntry(BaseModel):
+    entry_id: str
+    kind: Literal["experience", "project", "education", "skills", "other"]
+    heading: str = ""
+    organization: str = ""
+    role: str = ""
+    date_range: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
+    original_bullets: list[str] = Field(default_factory=list)
+
+
 class RoleRecommendation(BaseModel):
     role: str
     keywords: list[str] = Field(min_length=1, max_length=4)
@@ -40,6 +51,7 @@ class CandidateProfile(BaseModel):
     experience_years: float | None = None
     education: str | None = None
     evidence: list[Evidence] = Field(default_factory=list)
+    resume_entries: list[ResumeSourceEntry] = Field(default_factory=list)
     recommendations: list[RoleRecommendation] = Field(default_factory=list)
     selected_roles: list[RoleRecommendation] = Field(default_factory=list)
     cities: list[str] = Field(default_factory=list)
@@ -363,6 +375,7 @@ class ResumeEntry(BaseModel):
     heading: str
     subheading: str = ""
     date_range: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
     bullets: list[ResumeBullet] = Field(default_factory=list)
 
 
@@ -371,6 +384,19 @@ class ResumeSection(BaseModel):
     title: str
     entries: list[ResumeEntry] = Field(default_factory=list)
     bullets: list[ResumeBullet] = Field(default_factory=list)
+
+
+class ResumeQualityReport(BaseModel):
+    relevance_score: int = Field(default=0, ge=0, le=100)
+    specificity_score: int = Field(default=0, ge=0, le=100)
+    structure_score: int = Field(default=0, ge=0, le=100)
+    conciseness_score: int = Field(default=0, ge=0, le=100)
+    evidence_coverage: int = Field(default=0, ge=0, le=100)
+    duplicate_count: int = Field(default=0, ge=0)
+    estimated_pages: float = Field(default=1.0, ge=0.1)
+    issues: list[str] = Field(default_factory=list)
+    uncovered_requirements: list[str] = Field(default_factory=list)
+    passed: bool = False
 
 
 class ResumeDraftVersion(BaseModel):
@@ -387,6 +413,7 @@ class ResumeDraftVersion(BaseModel):
     contact: CandidateContact
     source: Literal["langgraph", "fallback", "user_edit"] = "fallback"
     change_log: list[dict[str, Any]] = Field(default_factory=list)
+    quality_report: ResumeQualityReport = Field(default_factory=ResumeQualityReport)
     validation_status: Literal["VALID", "FAILED_VALIDATION"] = "VALID"
     created_at: str
 

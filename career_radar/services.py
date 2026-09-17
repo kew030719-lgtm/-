@@ -10,7 +10,7 @@ from .apply import ApplyService
 from .database import Database
 from .interview import InterviewService
 from .metrics import failure_category
-from .resume import ResumeError, validate_citations
+from .resume import ResumeError, ResumeGenerationError, validate_citations
 from .schemas import TaskStatus
 from .scoring import score_job
 from .sites import (
@@ -92,6 +92,11 @@ class TaskQueue:
                         item.task_id, status="NEEDS_MANUAL_INPUT",
                         failure_category=failure_category(str(exc), "NEEDS_MANUAL_INPUT"), pause_reason=str(exc),
                     )
+            except ResumeGenerationError as exc:
+                self.database.update_task(
+                    item.task_id, status=TaskStatus.FAILED, error=str(exc),
+                    message="定向简历生成失败，可补充信息后重试",
+                )
             except ResumeError as exc:
                 self.database.update_task(item.task_id, status=TaskStatus.FAILED_VALIDATION, error=str(exc), message="证据校验失败")
             except asyncio.CancelledError:
@@ -210,6 +215,11 @@ class TaskQueue:
         self.database.save_tailoring(tailoring)
         try:
             version = await self.tailoring_service.generate(tailoring.tailoring_id)
+        except ResumeGenerationError:
+            tailoring = self.database.get_tailoring(tailoring.tailoring_id)
+            tailoring.status = "FAILED"
+            self.database.save_tailoring(tailoring)
+            raise
         except ResumeError:
             tailoring = self.database.get_tailoring(tailoring.tailoring_id)
             tailoring.status = "FAILED_VALIDATION"

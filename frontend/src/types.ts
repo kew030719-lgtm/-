@@ -239,7 +239,21 @@ export interface ResumeEntry {
   heading: string
   subheading: string
   date_range: string
+  evidence_ids: string[]
   bullets: ResumeBullet[]
+}
+
+export interface ResumeQualityReport {
+  relevance_score: number
+  specificity_score: number
+  structure_score: number
+  conciseness_score: number
+  evidence_coverage: number
+  duplicate_count: number
+  estimated_pages: number
+  issues: string[]
+  uncovered_requirements: string[]
+  passed: boolean
 }
 
 export interface ResumeSection {
@@ -270,6 +284,7 @@ export interface ResumeDraftVersion {
   contact: CandidateContact
   source: string
   change_log: Array<{ kind?: string; target?: string; before?: string; after?: string }>
+  quality_report: ResumeQualityReport
   validation_status: 'VALID' | 'FAILED_VALIDATION'
 }
 

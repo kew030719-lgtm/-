@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -12,7 +13,7 @@ from pydantic import BaseModel, Field
 from .agent_runtime import HybridAgentRuntime
 from .config import Settings
 from .resume import SKILLS, validate_citations
-from .schemas import CandidateProfile, Comparison, Evidence, JobScore, JobSnapshot, RoleRecommendation
+from .schemas import CandidateProfile, Comparison, JobScore, JobSnapshot, RoleRecommendation
 from .tools import ToolContext
 
 if TYPE_CHECKING:
@@ -94,21 +95,48 @@ class ResumeBulletOutput(BaseModel):
 
 
 class ResumeEntryOutput(BaseModel):
-    bullets: list[ResumeBulletOutput] = Field(default_factory=list)
-
-
-class ResumeSectionOutput(BaseModel):
-    section_id: str = ""
-    title: str = ""
-    bullets: list[ResumeBulletOutput] = Field(default_factory=list)
-    entries: list[ResumeEntryOutput] = Field(default_factory=list)
+    entry_id: str
+    bullets: list[ResumeBulletOutput] = Field(default_factory=list, max_length=4)
 
 
 class ResumeDraftOutput(BaseModel):
     headline: str
-    summary: list[ResumeBulletOutput]
-    skills: list[ResumeBulletOutput]
-    sections: list[ResumeSectionOutput]
+    summary: list[ResumeBulletOutput] = Field(max_length=2)
+    skills: list[ResumeBulletOutput] = Field(max_length=8)
+    entries: list[ResumeEntryOutput] = Field(max_length=10)
+
+
+class ResumeWritingOutput(BaseModel):
+    text: str = ""
+
+
+class ResumeRequirementOutput(BaseModel):
+    requirement: str
+    importance: int = Field(default=50, ge=0, le=100)
+    match: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class ResumePlanOutput(BaseModel):
+    requirements: list[ResumeRequirementOutput] = Field(default_factory=list)
+    selected_entry_ids: list[str] = Field(default_factory=list)
+    de_emphasized_entry_ids: list[str] = Field(default_factory=list)
+    omitted_entry_ids: list[str] = Field(default_factory=list)
+    strategy: str = ""
+
+
+class ResumeQualityReviewOutput(BaseModel):
+    relevance_score: int = Field(default=0, ge=0, le=100)
+    specificity_score: int = Field(default=0, ge=0, le=100)
+    structure_score: int = Field(default=0, ge=0, le=100)
+    conciseness_score: int = Field(default=0, ge=0, le=100)
+    issues: list[str] = Field(default_factory=list)
+    revision_instructions: list[str] = Field(default_factory=list)
+    passed: bool = False
+
+
+class ResumeQualityReviewTextOutput(BaseModel):
+    text: str = ""
 
 
 def _extract_json(text: str):
@@ -159,31 +187,31 @@ class AgentService:
 
     async def tailor_resume(self, profile: "CandidateProfile", target: "TargetJob",
                             tailoring: "ResumeTailoring", contact: "CandidateContact",
-                            fallback: "ResumeDraftVersion") -> "ResumeDraftVersion":
+                            fallback: "ResumeDraftVersion",
+                            validator: Callable[["ResumeDraftVersion"], None] | None = None,
+                            ) -> "ResumeDraftVersion":
         from .schemas import ResumeDraftVersion
 
-        prompt = """为当前目标岗位生成一份中文定向简历内容。只调用一次 read_tailoring_context；返回内容已经包含目标 JD 和高相关候选人证据，不再搜索。
-只使用工具返回的候选人证据，不得输出姓名、电话、邮箱或地址，不得虚构技能、职责、公司、学校、日期或数字。
-每个 summary、skills、sections 中的 bullet 都必须给出 evidence_ids，值必须是候选人证据的 block_id。
-返回 JSON，字段为 headline、summary、skills、sections。ResumeBullet 字段：bullet_id、text、evidence_ids、provenance、priority。
-ResumeSection 字段：section_id、title、entries、bullets。entries 可以为空数组。priority 为 0 到 100。
-只输出 2 条个人概述、最多 8 个技能、最多 4 个区块且每区块最多 4 条；不要重复同一事实。适合 1 至 2 页简历。
+        plan_prompt = """你不是重新创作候选人的经历，而是为目标岗位选择、排序和组织已有事实。
+只调用一次 read_tailoring_context，然后输出岗位要求与候选人证据的对齐方案：
+1. requirements 按重要性列出要求，match 只能是 strong、weak、missing，并给出候选人 evidence_ids；
+2. selected_entry_ids、de_emphasized_entry_ids、omitted_entry_ids 只能使用 resume_entries 的 entry_id；
+3. strategy 简述一页简历的编排策略。
+不得改写事实，不得生成简历正文，不得把不同公司或项目的证据合并。无证据要求必须标为 missing。
 当前 tailoring_id：""" + tailoring.tailoring_id
-        output, registered, runtime_source = await self._run_structured(
-            prompt, f"tailor-{tailoring.tailoring_id}", ResumeDraftOutput,
-            system_prompt="你是 CareerRadar 定向简历 Agent。所有简历事实必须有候选人证据，只返回指定 JSON。",
+        plan, registered, runtime_source = await self._run_structured(
+            plan_prompt, f"tailor-plan-{tailoring.tailoring_id}", ResumePlanOutput,
+            system_prompt="你是 CareerRadar 简历规划 Agent，只做岗位与证据对齐，只返回指定 JSON。",
             tool_context=ToolContext(
                 database_path=self.settings.database_path, tool_mode="tailoring",
                 profile_id=profile.profile_id, target_job_id=target.target_job_id,
                 tailoring_id=tailoring.tailoring_id,
-            ), timeout_seconds=150,
-            max_tokens=5000, api_max_retries=1,
+            ), timeout_seconds=150, max_tokens=3000, api_max_retries=1,
         )
         if not registered:
             raise RuntimeError("CareerRadar 定向简历工具未加载")
-        value = output.model_dump()
         evidence = {item.block_id: item for item in profile.evidence}
-
+        entry_lookup = {item.entry_id: item for item in profile.resume_entries}
         def normalize_bullet(raw: object, index: int) -> dict:
             if not isinstance(raw, dict):
                 raise ValueError("模型返回了无效的简历条目")
@@ -214,39 +242,137 @@ ResumeSection 字段：section_id、title、entries、bullets。entries 可以�
                 "evidence_ids": ids, "provenance": provenance, "priority": priority,
             }
 
-        summary = [normalize_bullet(item, index) for index, item in enumerate(value.get("summary") or [])][:3]
-        skills = [normalize_bullet(item, index) for index, item in enumerate(value.get("skills") or [])][:8]
-        sections = []
-        for section_index, raw_section in enumerate(value.get("sections") or []):
-            if not isinstance(raw_section, dict):
-                continue
-            section_bullets = [
-                normalize_bullet(item, index)
-                for index, item in enumerate(raw_section.get("bullets") or [])
-            ]
-            # Entry headings and date ranges do not carry evidence IDs in the public
-            # schema. Flatten their cited bullets so uncited company/date metadata can
-            # never enter an exported resume.
-            for raw_entry in raw_section.get("entries") or []:
+        def normalize_draft(output: ResumeDraftOutput) -> ResumeDraftVersion:
+            value = output.model_dump()
+            summary = [normalize_bullet(item, index) for index, item in enumerate(value.get("summary") or [])][:2]
+            skills = [normalize_bullet(item, index) for index, item in enumerate(value.get("skills") or [])][:8]
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for raw_entry in value.get("entries") or []:
                 if not isinstance(raw_entry, dict):
                     continue
-                section_bullets.extend(
-                    normalize_bullet(item, index)
-                    for index, item in enumerate(raw_entry.get("bullets") or [])
-                )
-            sections.append({
-                "section_id": str(raw_section.get("section_id") or f"section_{section_index + 1}"),
-                "title": str(raw_section.get("title") or "相关经历").strip(),
-                "entries": [], "bullets": section_bullets[:5],
+                source_entry_id = str(raw_entry.get("entry_id") or "")
+                source_entry = entry_lookup.get(source_entry_id)
+                if not source_entry:
+                    continue
+                ids = list(source_entry.evidence_ids)
+                bullets = [normalize_bullet(item, index) for index, item in enumerate(raw_entry.get("bullets") or [])]
+                if any(not set(item["evidence_ids"]).issubset(set(ids)) for item in bullets):
+                    raise ValueError("模型把不同经历的事实合并到了同一条目")
+                grouped.setdefault(source_entry.kind, []).append({
+                    "entry_id": source_entry_id, "heading": source_entry.heading,
+                    "subheading": " · ".join(filter(None, [source_entry.organization, source_entry.role])),
+                    "date_range": source_entry.date_range,
+                    "evidence_ids": ids, "bullets": bullets[:4],
+                })
+            labels = {"experience": "工作经历", "project": "项目经历", "education": "教育经历",
+                      "skills": "补充技能", "other": "其他信息"}
+            sections = [{
+                "section_id": f"section_{kind}", "title": labels[kind],
+                "entries": entries, "bullets": [],
+            } for kind, entries in grouped.items()]
+            return ResumeDraftVersion.model_validate({
+                **fallback.model_dump(), "headline": value.get("headline", fallback.headline),
+                "summary": summary, "skills": skills, "sections": sections,
+                "contact": contact.model_dump(), "source": runtime_source,
             })
-        return ResumeDraftVersion.model_validate({
-            **fallback.model_dump(),
-            "headline": value.get("headline", fallback.headline),
-            "summary": summary or fallback.summary,
-            "skills": skills or fallback.skills,
-            "sections": sections or fallback.sections,
-            "contact": contact.model_dump(), "source": runtime_source,
-        })
+
+        context = {
+            "target_job": {"company": target.company, "title": target.title,
+                           "responsibilities": target.responsibilities[:15],
+                           "required_skills": target.required_skills[:15]},
+            "candidate": {"skills": profile.skills, "experience_years": profile.experience_years,
+                          "education": profile.education,
+                          "resume_entries": [item.model_dump() for item in profile.resume_entries],
+                          "evidence": [item.model_dump() for item in profile.evidence]},
+            "plan": plan.model_dump(),
+        }
+        feedback: list[str] = []
+        for attempt in range(3):
+            writer_prompt = """根据输入的岗位对齐方案生成中文岗位定向简历。将结果写入 text 字段，text 每行严格使用以下一种格式：
+HEADLINE|目标岗位名
+SUMMARY|证据ID逗号分隔|概述正文
+SKILL|证据ID逗号分隔|技能文字
+ENTRY|原经历entry_id|证据ID逗号分隔|改写后的经历要点
+目标是让招聘者在 10 秒内看到真实匹配点，默认一页，允许重新排序但不得改变事实归属。
+每条内容必须引用 candidate.evidence 的 evidence_ids。entries 只输出 entry_id 和 bullets；entry_id 必须来自
+resume_entries，且 bullets 只能引用该经历自己的 evidence_ids。不要输出公司、项目名、角色、日期或章节标题，后端会从原简历复制。
+每条经历优先采用“动作 + 任务或技术 + 结果”；没有结果证据时准确描述交付物，不得增加数字。
+不得空泛堆砌“熟悉、精通、负责”，不得重复事实、照抄 JD 或增加无证据技能。
+最多 2 行 SUMMARY、8 行 SKILL、10 个经历且每个经历最多 4 行 ENTRY。正文内不要使用竖线。不要输出 Markdown。
+输入：\n""" + json.dumps(context, ensure_ascii=False)
+            if feedback:
+                writer_prompt += "\n上一版必须修复的问题：" + json.dumps(feedback, ensure_ascii=False)
+            output, _tools, _source = await self._run_structured(
+                writer_prompt, f"tailor-write-{tailoring.tailoring_id}-{attempt + 1}", ResumeWritingOutput,
+                system_prompt="你是 CareerRadar 定向简历改写 Agent，只能重组有证据的真实经历，严格返回行协议。",
+                timeout_seconds=300, max_tokens=8000, api_max_retries=1,
+            )
+            raw: dict[str, Any] = {"headline": target.title, "summary": [], "skills": [], "entries": []}
+            entries: dict[str, dict[str, Any]] = {}
+            for line in output.text.splitlines():
+                parts = [item.strip() for item in line.split("|", 3)]
+                if len(parts) == 2 and parts[0] == "HEADLINE":
+                    raw["headline"] = parts[1]
+                elif len(parts) == 3 and parts[0] in {"SUMMARY", "SKILL"}:
+                    item = {"text": parts[2], "evidence_ids": [value.strip() for value in parts[1].split(",") if value.strip()]}
+                    raw["summary" if parts[0] == "SUMMARY" else "skills"].append(item)
+                elif len(parts) == 4 and parts[0] == "ENTRY":
+                    entry = entries.setdefault(parts[1], {"entry_id": parts[1], "bullets": []})
+                    entry["bullets"].append({
+                        "text": parts[3],
+                        "evidence_ids": [value.strip() for value in parts[2].split(",") if value.strip()],
+                    })
+            raw["entries"] = list(entries.values())
+            version = normalize_draft(ResumeDraftOutput.model_validate(raw))
+            if validator:
+                try:
+                    validator(version)
+                except Exception as exc:
+                    feedback = [str(exc)]
+                    if attempt < 2:
+                        continue
+                    raise
+            review_prompt = """评审这份定向简历，不得创造或改写候选人事实。将结果写入 text 字段，每行严格使用：
+SCORES|岗位相关性0-100|具体性0-100|结构0-100|简洁度0-100
+PASS|true或false
+ISSUE|具体问题
+REVISION|可执行的改写要求
+只有四项均不低于 70、没有跨经历混写、没有无证据事实、适合一页阅读时才能 PASS|true。不要输出 Markdown。\n输入：\n""" + json.dumps({
+                "target_job": context["target_job"], "plan": context["plan"],
+                "draft": version.model_dump(exclude={"contact"}),
+            }, ensure_ascii=False)
+            review, _tools, _source = await self._run_structured(
+                review_prompt, f"tailor-review-{tailoring.tailoring_id}-{attempt + 1}",
+                ResumeQualityReviewTextOutput,
+                system_prompt="你是严格的中文简历质量评审，只评审，不添加候选人事实，严格返回行协议。",
+                timeout_seconds=180, max_tokens=3000, api_max_retries=1,
+            )
+            parsed_review = ResumeQualityReviewOutput()
+            for line in review.text.splitlines():
+                parts = [item.strip() for item in line.split("|")]
+                if len(parts) == 5 and parts[0] == "SCORES":
+                    try:
+                        scores = [max(0, min(100, int(value))) for value in parts[1:]]
+                        (parsed_review.relevance_score, parsed_review.specificity_score,
+                         parsed_review.structure_score, parsed_review.conciseness_score) = scores
+                    except ValueError:
+                        pass
+                elif len(parts) == 2 and parts[0] == "PASS":
+                    parsed_review.passed = parts[1].lower() == "true"
+                elif len(parts) == 2 and parts[0] == "ISSUE":
+                    parsed_review.issues.append(parts[1])
+                elif len(parts) == 2 and parts[0] == "REVISION":
+                    parsed_review.revision_instructions.append(parts[1])
+            version.quality_report.relevance_score = parsed_review.relevance_score
+            version.quality_report.specificity_score = parsed_review.specificity_score
+            version.quality_report.structure_score = parsed_review.structure_score
+            version.quality_report.conciseness_score = parsed_review.conciseness_score
+            version.quality_report.issues = parsed_review.issues
+            version.quality_report.passed = parsed_review.passed
+            if parsed_review.passed:
+                return version
+            feedback = parsed_review.revision_instructions or parsed_review.issues or ["提高岗位相关性、具体性、结构和简洁度"]
+        raise ValueError("定向简历经过两次返工后仍未达到质量门槛：" + "；".join(feedback[:5]))
 
     async def compose_greeting(self, profile: CandidateProfile, snapshot: "JobSnapshot") -> tuple[GreetingOutput, str]:
         """The message a candidate sends a recruiter alongside their resume.

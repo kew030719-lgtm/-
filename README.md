@@ -13,7 +13,7 @@ CareerRadar 是一个 Windows 优先、本地单用户、面向高校毕业生�
 
 页面右侧的求职 Agent 在整个流程中保持可用。提交简历前可进行通用职业咨询；提交后会自动关联当前画像、抓取任务和报告，可以追问排名原因、能力缺口、面试题和准备计划。修改城市、岗位、薪资或重新搜索时，Agent 只生成确认卡，点击确认后才修改数据或创建任务。
 
-“06 定向简历”支持三种目标来源：本次排名中的岗位、用户粘贴的公司/岗位/JD，以及 BOSS 公开职位链接。Agent 最多追问 5 个能显著改善简历的事实；只有用户确认的回答才会成为长期补充证据。网页编辑每次创建新版本，原画像、旧草稿、旧岗位和旧报告均保留。联系方式单独存储，只在本地导出时合并，不进入 Agent 工具或模型请求。
+“06 定向简历”支持三种目标来源：本次排名中的岗位、用户粘贴的公司/岗位/JD，以及 BOSS 公开职位链接。Agent 最多追问 5 个能显著改善简历的事实；只有用户确认的回答才会成为长期补充证据。生成过程依次进行 JD 与证据对齐、定向改写、质量评审，并在不合格时最多返工两次；默认优先一页。原简历中的公司、项目、学校和时间作为独立经历单元保留，不能跨经历拼接。模型不可用或质量仍不合格时会明确失败，不再把证据拼接版冒充定向简历，用户可以补充事实后重试。网页编辑每次创建新版本，原画像、旧草稿、旧岗位和旧报告均保留。联系方式单独存储，只在本地导出时合并，不进入 Agent 工具或模型请求。
 
 扫描版 PDF 暂不支持 OCR。遇到登录页、验证码、白屏或未知页面结构时，任务进入 `NEEDS_MANUAL_INPUT`。用户在专用标签页完成登录或验证后，点击扩展中的“继续任务”，从原队列位置恢复。助手不调用 Cookie API；只提取任务标签页的页面内容，上传前移除输入框、内嵌框架和非结构化脚本。采集完成后后端自动启动分析，关闭扩展弹窗不影响采集。
 
@@ -158,7 +158,7 @@ npm run build                # 输出到 career_radar/static/app/，随后访问
 
 面试准备接口从 `POST /api/interview-preps` 开始，异步生成后由 `GET /api/interview-preps/{id}` 读取，也可用 `GET /api/jobs/{snapshot_id}/interview-prep?profile_id=…` 取某个岗位最近一次的准备。与 `Comparison.action_plan` 不同，它是**按岗位**而非针对前三名的统一计划。校验规则有一条刻意的例外：针对岗位缺失技能提出的问题，其证据来自岗位原文而非候选人简历，否则任何关于能力差距的提问都会因为"简历里没有"而被判为无据。
 
-定向简历接口从 `POST /api/target-jobs` 和 `POST /api/resume-tailorings` 开始，追问确认后由异步任务生成草稿。`POST /api/resume-drafts/{id}/versions` 保存网页编辑的新版本，`POST /api/resume-drafts/{id}/exports` 生成两套 DOCX/PDF，下载文件仅从本地 `data/exports` 返回。模型生成的每条内容都必须引用当前候选人的证据；未经证实的技能、数字或机构会使任务进入 `FAILED_VALIDATION`。
+定向简历接口从 `POST /api/target-jobs` 和 `POST /api/resume-tailorings` 开始，追问确认后由异步任务生成草稿。草稿返回 `quality_report`，包含相关性、具体性、结构、简洁度、证据覆盖、重复项、预计页数和未覆盖要求；经历条目的标题与日期也必须引用当前经历的证据。`POST /api/resume-drafts/{id}/versions` 保存网页编辑的新版本，`POST /api/resume-drafts/{id}/exports` 生成两套 DOCX/PDF，下载文件仅从本地 `data/exports` 返回。模型生成的每条内容都必须引用当前候选人的证据；未经证实的技能、数字、机构、日期或跨经历拼接会使任务进入 `FAILED_VALIDATION`。脱敏的十组定向简历回归样本位于 `evaluation/tailoring_cases.json`，人工盲评达到 80% 改善率前不得宣称发布验收通过。
 
 真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。`scripts/generate_evaluation_report.py` 会根据 SQLite 和仓库外的脱敏评测清单生成 JSON/Markdown 发布门槛报告；格式和使用方法见 [evaluation/README.md](evaluation/README.md)。字段存在不等于语义准确，仍需抽查原始岗位。
 
