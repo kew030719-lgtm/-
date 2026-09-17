@@ -230,12 +230,14 @@ export default function Panel6Tailoring(props: Props) {
         }}
       >
         <div className="section-intro">
-          <h3>确认缺失事实</h3>
-          <p>只填写你真实做过的内容；没有相关经历时点击跳过。</p>
+          <h3>{questions.length ? '确认缺失事实' : '无需补充事实'}</h3>
+          <p>{questions.length
+            ? '只填写你真实做过的内容；没有相关经历时点击跳过。'
+            : '现有简历证据已经覆盖主要岗位要求，可以直接生成。'}</p>
         </div>
         <div id="question-list">
           {questions.length === 0 ? (
-            <p>现有简历证据已经覆盖主要岗位要求，可以直接生成。</p>
+            <p>系统不会要求你重复填写已有经历。</p>
           ) : (
             questions.map((item) => (
               <div className="tailor-question" key={item.question_id} data-question-id={item.question_id}>
@@ -265,7 +267,9 @@ export default function Panel6Tailoring(props: Props) {
             ))
           )}
         </div>
-        <button className="primary compact" type="submit">确认事实并生成简历</button>
+        <button className="primary compact" type="submit">
+          {questions.length ? '确认事实并生成简历' : '直接生成定向简历'}
+        </button>
       </form>
 
       <div id="tailoring-progress" className={tailoringBusy ? 'tailoring-progress' : 'tailoring-progress hidden'}>

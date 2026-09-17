@@ -57,6 +57,14 @@ describe('Panel6Tailoring target selection', () => {
     expect(html).toContain('仅当目标岗位未被 CareerRadar 采集时')
   })
 
+  it('labels a genuinely empty question list as ready to generate', () => {
+    const html = renderToStaticMarkup(<Panel6Tailoring {...baseProps} />)
+
+    expect(html).toContain('无需补充事实')
+    expect(html).toContain('直接生成定向简历')
+    expect(html).not.toContain('确认事实并生成简历')
+  })
+
   it('confirms that a snapshot target is using database details', () => {
     const targetJob: TargetJob = {
       target_job_id: 'target_1',

@@ -883,6 +883,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tailoring = database.get_tailoring(tailoring_id)
         if not tailoring:
             raise HTTPException(404, "定向简历任务不存在")
+        tailoring = tailoring_service.restore_missing_questions(tailoring)
         return {"tailoring": tailoring, "target_job": database.get_target_job(tailoring.target_job_id)}
 
     @app.post("/api/resume-tailorings/{tailoring_id}/answers")

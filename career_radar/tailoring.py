@@ -103,6 +103,44 @@ def _questions(profile: CandidateProfile, target: TargetJob,
         question=f"岗位要求 {skill}。你是否在真实项目中使用过？如果有，请说明使用场景、你的职责和结果；没有可以跳过。",
         requirement=skill,
     ) for skill in missing[:5]]
+    if len(questions) < 5:
+        signals = ("年以上", "至少", "经验", "具备", "熟悉", "能够", "负责", "设计", "建立", "推动", "分析", "评测")
+        boilerplate = ("在这里", "真诚地邀请", "技术氛围", "职业生涯", "平台是", "一起驱动", "共同探索", "站在")
+        concepts = (
+            "产品管理", "项目管理", "用户研究", "数据分析", "问题归因", "评测体系",
+            "评测数据集", "评分标准", "回归测试", "自动化评测", "人工评测", "A/B 实验",
+            "大模型", "工具调用", "跨团队协作", "产品路线图", "模型选型",
+        )
+        candidates = []
+        for index, raw in enumerate(target.responsibilities):
+            requirement = re.sub(r"^\s*\d+[、.．)）]\s*", "", raw).strip()
+            if not 12 <= len(requirement) <= 220 or any(value in requirement for value in boilerplate):
+                continue
+            score = sum(3 if value in {"年以上", "至少", "经验", "具备", "熟悉", "能够"} else 1
+                        for value in signals if value in requirement)
+            if score == 0:
+                continue
+            lowered = requirement.lower()
+            terms = {display.lower() for token, display in SKILLS.items() if token in lowered}
+            terms.update(token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9+#./-]{1,24}", requirement))
+            terms.update(value.lower() for value in concepts if value.lower() in lowered)
+            covered = sum(1 for term in terms if term in known)
+            if terms and covered >= max(2, round(len(terms) * 0.6)):
+                continue
+            candidates.append((-score, index, requirement))
+        for _score, _index, requirement in sorted(candidates):
+            if len(questions) >= 5:
+                break
+            if any(skill.lower() in requirement.lower() for skill in missing):
+                continue
+            questions.append(TailoringQuestion(
+                question_id=_stable_id("question", f"{target.target_job_id}:{requirement}"),
+                question=(
+                    f"岗位强调“{requirement[:90]}”。你的真实经历中是否有能证明这一点的案例？"
+                    "如有请说明使用场景、个人贡献、交付结果和可证实数据；没有可以跳过。"
+                ),
+                requirement=requirement,
+            ))
     return questions, missing
 
 
@@ -271,6 +309,26 @@ class TailoringService:
             status="COLLECTING" if questions else "READY", questions=questions,
             missing_requirements=missing, created_at=stamp, updated_at=stamp,
         )
+        return self.database.save_tailoring(tailoring)
+
+    def restore_missing_questions(self, tailoring: ResumeTailoring) -> ResumeTailoring:
+        """Backfill questions for tasks created before JD requirement fallback existed."""
+        if tailoring.questions or tailoring.status == "SUCCEEDED":
+            return tailoring
+        profile = self.database.get_profile(tailoring.profile_id)
+        target = self.database.get_target_job(tailoring.target_job_id)
+        if not profile or not target:
+            return tailoring
+        questions, missing = _questions(
+            profile, target, self.database.list_supplemental_evidence(profile.profile_id),
+        )
+        if not questions:
+            return tailoring
+        tailoring.questions = questions
+        tailoring.missing_requirements = missing
+        tailoring.status = "COLLECTING"
+        tailoring.task_id = None
+        tailoring.error = None
         return self.database.save_tailoring(tailoring)
 
     def save_answers(self, tailoring_id: str, answers: dict[str, str | None]) -> ResumeTailoring:

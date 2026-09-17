@@ -164,6 +164,8 @@ npm run build                # 输出到 career_radar/static/app/，随后访问
 
 `deepseek-flash` 的思考模式不接受 PydanticAI 默认的强制输出工具选择。无业务工具的定向简历阶段会改用提示词 JSON 输出，再由同一 Pydantic 类型在本地校验；规划所需的脱敏简历证据和岗位上下文由后端直接注入，不发送 `tool_choice`，联系方式仍不会进入模型请求。
 
+事实追问不只依赖采集器识别出的 `required_skills`。当该字段为空或不足 5 项时，后端会从 JD 的职责、经验年限、评测和协作要求中补充最多 5 个高影响问题；旧的空问题失败任务在重新打开时也会补建问题。确实没有缺口时，界面会明确提供“直接生成定向简历”，而不是显示没有输入框的空白追问区。
+
 真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。`scripts/generate_evaluation_report.py` 会根据 SQLite 和仓库外的脱敏评测清单生成 JSON/Markdown 发布门槛报告；格式和使用方法见 [evaluation/README.md](evaluation/README.md)。字段存在不等于语义准确，仍需抽查原始岗位。
 
 `scripts/repair_job_fields.py` 用于修复早期解析器把推荐列表混入职责的历史快照，仅处理指定任务。运行前自动备份 SQLite；保留原抓取时间与快照 ID，不将历史文本重解析冒充重新抓取。应在生成分析报告前运行。

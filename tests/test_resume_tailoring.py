@@ -11,7 +11,9 @@ from career_radar.config import Settings
 from career_radar.resume import ResumeError, build_profile, extract_candidate_contact
 from career_radar.schemas import Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion
 from career_radar.sites import FetchResult
-from career_radar.tailoring import _fallback_draft, _public_profile, validate_draft
+from career_radar.tailoring import (
+    _fallback_draft, _public_profile, _questions, target_from_pasted, validate_draft,
+)
 from career_radar.web import create_app
 
 
@@ -146,6 +148,57 @@ def test_target_tailoring_questions_confirm_and_version_history(tmp_path):
                 versions = (await client.get(f"/api/resume-drafts/{completed['draft_id']}")).json()["versions"]
                 assert [item["version"] for item in versions] == [2, 1]
     asyncio.run(run())
+
+
+def test_jd_requirements_create_questions_when_required_skills_are_empty(tmp_path):
+    app = create_app(settings(tmp_path))
+    app.state.database.initialize()
+    profile = build_profile(RESUME, "profile_jd_questions")
+    target = target_from_pasted(
+        profile.profile_id, "星图科技", "AI 产品经理",
+        "负责建立 AI Agent 产品效果评测体系和评分标准，需要分析失败案例并推动改进。",
+    )
+    target.required_skills = []
+    target.responsibilities = [
+        "负责建立 AI Agent 产品效果评测体系和评分标准。",
+        "具备数据分析和问题归因能力，能从失败案例提出验证假设。",
+        "至少 1 年大模型或 AI Agent 产品相关经验。",
+        "在这里可以接触优秀团队并获得成长机会。",
+    ]
+
+    questions, missing = _questions(profile, target, [])
+
+    assert missing == []
+    assert 1 <= len(questions) <= 5
+    assert any("评测体系" in item.requirement or "问题归因" in item.requirement for item in questions)
+    assert all("成长机会" not in item.requirement for item in questions)
+
+
+def test_old_failed_tailoring_backfills_empty_questions(tmp_path):
+    app = create_app(settings(tmp_path))
+    app.state.database.initialize()
+    profile = build_profile(RESUME, "profile_old_empty_questions")
+    profile.confirmed = True
+    app.state.database.save_profile(profile)
+    target = target_from_pasted(
+        profile.profile_id, "星图科技", "AI 产品经理",
+        "具备 AI 产品评测设计能力，能够建立评分标准并分析失败案例，推动产品持续改进。",
+    )
+    target.required_skills = []
+    target.responsibilities = ["具备评测设计能力，能够建立评分标准并分析失败案例。"]
+    app.state.database.save_target_job(target)
+    tailoring = app.state.tailoring_service.create_tailoring(profile.profile_id, target.target_job_id)
+    tailoring.questions = []
+    tailoring.status = "FAILED"
+    tailoring.task_id = "task_old_failed"
+    tailoring.error = "旧任务失败"
+    app.state.database.save_tailoring(tailoring)
+
+    restored = app.state.tailoring_service.restore_missing_questions(tailoring)
+
+    assert restored.status == "COLLECTING"
+    assert restored.task_id is None and restored.error is None
+    assert restored.questions
 
 
 def test_pasted_target_is_profile_scoped_and_link_is_restricted(tmp_path):
