@@ -515,6 +515,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 and preferred["status"] in {"QUEUED", "NEEDS_MANUAL_INPUT"}
             ):
                 return {"task_id": preferred_run_id}
+            # A browser page that names a task is an explicit binding.  Once
+            # that task is complete (or otherwise ineligible), do not silently
+            # fall through to an unrelated queued run.
+            return {"task_id": None}
         with database.connect() as db:
             rows = db.execute(
                 "SELECT id FROM tasks WHERE kind='discovery' AND status IN ('QUEUED','NEEDS_MANUAL_INPUT') "

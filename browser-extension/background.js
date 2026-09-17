@@ -36,8 +36,10 @@ async function preferredTaskId(){
 }
 async function pendingTask(){
   const preferred=await preferredTaskId();
-  const query=preferred?`?preferred_run_id=${encodeURIComponent(preferred)}`:'';
-  return api(`/api/browser-runs/pending${query}`);
+  // Only the task explicitly selected in the CareerRadar page may be claimed.
+  // This prevents a completed run from rolling into an older queued run.
+  if(!preferred)return {task_id:null};
+  return api(`/api/browser-runs/pending?preferred_run_id=${encodeURIComponent(preferred)}`);
 }
 async function api(path,body){
   const endpoint=await getEndpoint();

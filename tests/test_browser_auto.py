@@ -17,6 +17,38 @@ def test_selected_site_is_the_only_site_in_the_browser_queue(tmp_path):
     asyncio.run(selected_site_queue(tmp_path))
 
 
+def test_completed_preferred_run_does_not_fall_through_to_another_run(tmp_path):
+    asyncio.run(completed_preferred_run(tmp_path))
+
+
+async def completed_preferred_run(tmp_path):
+    app = create_app(settings(tmp_path))
+    async with (
+      app.router.lifespan_context(app),
+      httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+    ):
+        profile = (await client.post("/api/resumes", json={"text": RESUME})).json()
+        pid = profile["profile_id"]
+        await client.put(
+            f"/api/profiles/{pid}",
+            json={"selected_roles": profile["recommendations"][:1], "cities": ["北京"]},
+        )
+        completed = (await client.post(
+            "/api/discovery-runs", json={"profile_id": pid, "sites": ["boss"]},
+        )).json()["task_id"]
+        waiting = (await client.post(
+            "/api/discovery-runs", json={"profile_id": pid, "sites": ["job51"]},
+        )).json()["task_id"]
+        await client.delete(f"/api/tasks/{completed}")
+
+        # An explicitly bound task must never roll over to the other queued run.
+        preferred = await client.get(
+            "/api/browser-runs/pending", params={"preferred_run_id": completed},
+        )
+        assert preferred.json() == {"task_id": None}
+        assert (await client.get("/api/browser-runs/pending")).json() == {"task_id": waiting}
+
+
 async def selected_site_queue(tmp_path):
     app = create_app(settings(tmp_path))
     async with (

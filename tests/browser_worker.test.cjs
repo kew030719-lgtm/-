@@ -6,20 +6,20 @@ const path=require('node:path');
 const dir=path.join(__dirname,'../browser-extension');
 function harness(){
   const state={enabled:true}, calls=[], posts=[];
-  let status='QUEUED', pageKind='search', fail=false, networkDown=false, taskMissing=false, now=0, count=0, taskAllow=true, renderWait=0, currentUrl='';
+  let status='QUEUED', pageKind='search', fail=false, networkDown=false, taskMissing=false, now=0, count=0, taskAllow=true, renderWait=0, currentUrl='', preferred=true;
   const listeners={};
   const scheduled=[];
   const chrome={storage:{local:{get:async()=>structuredClone(state),set:async data=>Object.assign(state,structuredClone(data)),remove:async key=>delete state[key]}},
     alarms:{create:async()=>{},onAlarm:{addListener:fn=>listeners.alarm=fn}},
     runtime:{onInstalled:{addListener(){}},onStartup:{addListener(){}},onMessage:{addListener:fn=>listeners.message=fn}},
-    tabs:{query:async()=>[],onUpdated:{addListener:fn=>listeners.updated=fn},create:async({url})=>{calls.push(url);currentUrl=url;pageKind=url.includes('job_detail')?'detail':'search';return{id:1};},update:async(id,{url})=>{calls.push(url);currentUrl=url;pageKind=url.includes('job_detail')?'detail':'search';return{id};},get:async()=>({status:'complete',url:currentUrl})},
+    tabs:{query:async()=>preferred?[{url:'http://127.0.0.1:8000/app/?task=task_test',active:true,lastAccessed:1}]:[],onUpdated:{addListener:fn=>listeners.updated=fn},create:async({url})=>{calls.push(url);currentUrl=url;pageKind=url.includes('job_detail')?'detail':'search';return{id:1};},update:async(id,{url})=>{calls.push(url);currentUrl=url;pageKind=url.includes('job_detail')?'detail':'search';return{id};},get:async()=>({status:'complete',url:currentUrl})},
     scripting:{executeScript:async()=>[{result:{url:currentUrl,html:'fixture',text:fail?'':'职位详情'}}]}};
   const fetch=async(url,options)=>{
     if(networkDown)throw new TypeError('fetch failed');
     let data={};
     if(options&&options.method==='POST')posts.push(url);
     if(taskMissing&&url.includes('/api/tasks/'))return{ok:false,status:404,json:async()=>({detail:'任务不存在'})};
-    if(url.endsWith('/pending'))data={task_id:!taskMissing&&status==='QUEUED'?'task_test':null};
+    if(url.includes('/api/browser-runs/pending'))data={task_id:!taskMissing&&status==='QUEUED'?'task_test':null};
     else if(url.endsWith('/start')){status='RUNNING';data={task_id:'task_test',queue:[{url:'https://www.zhipin.com/web/geek/job?page=1',city:'北京',kind:'search',render_wait_ms:renderWait},{url:'https://www.zhipin.com/web/geek/job?page=2',city:'北京',kind:'search',render_wait_ms:renderWait}],interval_ms:10000,max_jobs:2,allow:{boss:{hosts:['www.zhipin.com','m.zhipin.com'],path_pattern:'/job_detail/[A-Za-z0-9_-]+\\.html',login_pattern:'/web/user|/login'}}};}
     else if(url.includes('/api/tasks/'))data={status,payload:{sites:['boss'],...(taskAllow?{allow:{boss:{hosts:['www.zhipin.com'],path_pattern:'/job_detail/[A-Za-z0-9_-]+\\.html',login_pattern:'/web/user'}}}:{})}};
     else if(url.endsWith('/progress')){status=JSON.parse(options.body).status;}
@@ -34,8 +34,14 @@ function harness(){
   let timerId=0;
   function reload(){context=vm.createContext({chrome,fetch,URL,AbortSignal,Date:{now:()=>now},console,setTimeout:(fn,delay)=>{scheduled.push(delay);return++timerId;},clearTimeout:()=>{},importScripts:file=>vm.runInContext(fs.readFileSync(path.join(dir,file),'utf8'),context)});vm.runInContext(fs.readFileSync(path.join(dir,'background.js'),'utf8'),context);}
   reload();
-  return{state,calls,posts,scheduled,reload,setFail:v=>fail=v,setNetworkDown:v=>networkDown=v,setStatus:v=>status=v,setTaskMissing:v=>taskMissing=v,setTaskAllow:v=>taskAllow=v,setRenderWait:v=>renderWait=v,tick:async(delta=30000)=>{now+=delta;await vm.runInContext('tick()',context);},complete:()=>listeners.updated(1,{status:'complete'}),command:(action,extra={})=>new Promise(resolve=>listeners.message({action,...extra},{},resolve))};
+  return{state,calls,posts,scheduled,reload,setFail:v=>fail=v,setNetworkDown:v=>networkDown=v,setStatus:v=>status=v,setTaskMissing:v=>taskMissing=v,setTaskAllow:v=>taskAllow=v,setRenderWait:v=>renderWait=v,setPreferred:v=>preferred=v,tick:async(delta=30000)=>{now+=delta;await vm.runInContext('tick()',context);},complete:()=>listeners.updated(1,{status:'complete'}),command:(action,extra={})=>new Promise(resolve=>listeners.message({action,...extra},{},resolve))};
 }
+test('without a bound CareerRadar task the helper does not claim an old queued run',async()=>{
+  const h=harness();h.setPreferred(false);await h.tick();
+  assert.equal(h.state.job,undefined);
+  assert.equal(h.calls.length,0);
+  assert.equal(h.posts.filter(url=>url.includes('/api/browser-runs/')).length,0);
+});
 test('a completed page is read immediately while the next navigation keeps the site interval',async()=>{
   const h=harness();
   await h.tick();

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CareerRadar 浏览器助手",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "minimum_chrome_version": "120",
   "description": "自动接收 CareerRadar 任务，在支持的招聘站点搜索、翻页并采集岗位。",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
