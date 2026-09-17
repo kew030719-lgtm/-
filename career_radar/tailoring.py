@@ -24,6 +24,7 @@ from .schemas import (
     ResumeDraftVersion, ResumeEntry, ResumeExport, ResumeSection, ResumeSourceEntry, ResumeTailoring,
     SupplementalEvidence, TailoringQuestion, TargetJob,
 )
+from .sites.base import is_benefit_label
 
 
 def _stable_id(prefix: str, value: str) -> str:
@@ -46,7 +47,8 @@ def _job_blocks(target_id: str, values: list[str]) -> list[Evidence]:
 def target_from_snapshot(profile_id: str, snapshot: JobSnapshot,
                          source_type: str = "snapshot", target_id: str | None = None) -> TargetJob:
     target_id = target_id or f"target_{uuid4().hex[:12]}"
-    values = [snapshot.title, snapshot.company, *snapshot.responsibilities, *snapshot.required_skills]
+    required_skills = [item for item in snapshot.required_skills if not is_benefit_label(item)]
+    values = [snapshot.title, snapshot.company, *snapshot.responsibilities, *required_skills]
     return TargetJob(
         target_job_id=target_id, profile_id=profile_id, source_type=source_type,
         # A target derived from a stored snapshot inherits that snapshot's site, so
@@ -54,7 +56,7 @@ def target_from_snapshot(profile_id: str, snapshot: JobSnapshot,
         site=snapshot.site or "boss",
         snapshot_id=snapshot.snapshot_id, company=snapshot.company, title=snapshot.title,
         url=snapshot.canonical_url, cleaned_text=snapshot.cleaned_text,
-        responsibilities=snapshot.responsibilities, required_skills=snapshot.required_skills,
+        responsibilities=snapshot.responsibilities, required_skills=required_skills,
         blocks=_job_blocks(target_id, values), created_at=now_iso(),
     )
 
@@ -97,7 +99,8 @@ def _is_resume_noise(evidence: Evidence) -> bool:
 def _questions(profile: CandidateProfile, target: TargetJob,
                supplements: list[SupplementalEvidence]) -> tuple[list[TailoringQuestion], list[str]]:
     known = " ".join([*(item.quote for item in profile.evidence), *(item.quote for item in supplements)]).lower()
-    missing = [skill for skill in target.required_skills if skill.lower() not in known]
+    required_skills = [skill for skill in target.required_skills if not is_benefit_label(skill)]
+    missing = [skill for skill in required_skills if skill.lower() not in known]
     questions = [TailoringQuestion(
         question_id=_stable_id("question", f"{target.target_job_id}:{skill}"),
         question=f"岗位要求 {skill}。你是否在真实项目中使用过？如果有，请说明使用场景、你的职责和结果；没有可以跳过。",
@@ -313,7 +316,8 @@ class TailoringService:
 
     def restore_missing_questions(self, tailoring: ResumeTailoring) -> ResumeTailoring:
         """Backfill questions for tasks created before JD requirement fallback existed."""
-        if tailoring.questions or tailoring.status == "SUCCEEDED":
+        has_benefit_questions = any(is_benefit_label(item.requirement) for item in tailoring.questions)
+        if (tailoring.questions and not has_benefit_questions) or tailoring.status == "SUCCEEDED":
             return tailoring
         profile = self.database.get_profile(tailoring.profile_id)
         target = self.database.get_target_job(tailoring.target_job_id)
@@ -322,11 +326,16 @@ class TailoringService:
         questions, missing = _questions(
             profile, target, self.database.list_supplemental_evidence(profile.profile_id),
         )
-        if not questions:
+        if not questions and not has_benefit_questions:
             return tailoring
+        previous = {item.question_id: item for item in tailoring.questions}
+        for question in questions:
+            if question.question_id in previous:
+                question.status = previous[question.question_id].status
+                question.answer = previous[question.question_id].answer
         tailoring.questions = questions
         tailoring.missing_requirements = missing
-        tailoring.status = "COLLECTING"
+        tailoring.status = "READY" if all(item.status != "PENDING" for item in questions) else "COLLECTING"
         tailoring.task_id = None
         tailoring.error = None
         return self.database.save_tailoring(tailoring)

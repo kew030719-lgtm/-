@@ -26,6 +26,17 @@ def fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
+def test_snapshot_separates_benefit_tags_from_required_skills():
+    job = build_snapshot(
+        site="zhaopin", canonical_url="https://example.com/job", platform_job_id="benefits",
+        title="AI 产品经理", company="测试公司", responsibilities=["负责 Agent 产品评测。"],
+        required_skills=["Python", "交通补助", "节日福利", "免费班车", "团建聚餐", "零食下午茶"],
+    )
+
+    assert job.required_skills == ["Python"]
+    assert job.benefits == ["交通补助", "节日福利", "免费班车", "团建聚餐", "零食下午茶"]
+
+
 # ------------------------------------------------------------------- 智联
 
 def test_zhaopin_search_extracts_ids_the_anchors_do_not_carry():

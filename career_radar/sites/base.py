@@ -111,6 +111,21 @@ def json_ld(soup: BeautifulSoup) -> dict:
 
 _YUAN_PER_MONTH = {"k": 1000, "千": 1000, "万": 10000, "w": 10000}
 
+BENEFIT_LABELS = (
+    "五险一金", "补充医疗", "定期体检", "带薪年假", "年终奖", "绩效奖金", "股票期权",
+    "交通补助", "交通补贴", "通讯补助", "通讯补贴", "餐饮补助", "餐补", "房补", "住房补贴",
+    "加班补助", "节日福利", "生日福利", "员工福利", "免费班车", "员工旅游", "团建聚餐",
+    "零食下午茶", "包吃", "包住", "周末双休", "弹性工作",
+)
+
+
+def is_benefit_label(value: str) -> bool:
+    normalized = re.sub(r"\s+", "", value).lower()
+    return bool(normalized) and (
+        any(label.lower() in normalized for label in BENEFIT_LABELS)
+        or normalized.endswith(("补助", "补贴", "福利", "奖金"))
+    )
+
 
 def parse_salary(text: str | None) -> tuple[int | None, int | None]:
     """Normalise a salary string to (monthly_min_yuan, monthly_max_yuan).
@@ -177,7 +192,10 @@ def build_snapshot(
     menus or recommendation lists.
     """
     responsibilities = [item for item in (responsibilities or []) if item][:max_responsibilities]
-    skills = [item for item in (required_skills or []) if item][:max_skills]
+    raw_skills = [item.strip() for item in (required_skills or []) if item and item.strip()]
+    inferred_benefits = [item for item in raw_skills if is_benefit_label(item)]
+    skills = [item for item in raw_skills if not is_benefit_label(item)][:max_skills]
+    benefit_values = list(dict.fromkeys([*(benefits or []), *inferred_benefits]))
     snapshot_id = f"snap_{uuid4().hex[:12]}"
     content_for_hash = "\n".join([title, company, salary, experience, education, *responsibilities, *skills])
     content_hash = hashlib.sha256(content_for_hash.encode()).hexdigest()
@@ -200,7 +218,7 @@ def build_snapshot(
         site=site, title=title, company=company or "公司名称未识别", city=city, salary=salary,
         salary_min=salary_min, salary_max=salary_max, experience=experience, education=education,
         responsibilities=responsibilities, required_skills=skills,
-        bonus_skills=list(bonus_skills or []), benefits=list(benefits or []), work_type=work_type,
+        bonus_skills=list(bonus_skills or []), benefits=benefit_values, work_type=work_type,
         **graduate,
         content_hash=content_hash, status=status, cleaned_text=body[:20_000],
         fetched_at=datetime.now(UTC).isoformat(), transport=transport, blocks=blocks,

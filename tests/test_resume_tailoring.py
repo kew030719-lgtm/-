@@ -9,7 +9,7 @@ from docx import Document
 
 from career_radar.config import Settings
 from career_radar.resume import ResumeError, build_profile, extract_candidate_contact
-from career_radar.schemas import Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion
+from career_radar.schemas import Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion, TailoringQuestion
 from career_radar.sites import FetchResult
 from career_radar.tailoring import (
     _fallback_draft, _public_profile, _questions, target_from_pasted, validate_draft,
@@ -174,6 +174,25 @@ def test_jd_requirements_create_questions_when_required_skills_are_empty(tmp_pat
     assert all("成长机会" not in item.requirement for item in questions)
 
 
+def test_benefits_never_create_tailoring_questions(tmp_path):
+    app = create_app(settings(tmp_path))
+    app.state.database.initialize()
+    profile = build_profile(RESUME, "profile_benefit_questions")
+    target = target_from_pasted(
+        profile.profile_id, "星图科技", "AI 产品经理",
+        "负责 AI Agent 产品评测体系建设，要求能够分析失败案例并推动产品持续改进。",
+    )
+    target.required_skills = ["交通补助", "节日福利", "免费班车", "团建聚餐", "零食下午茶"]
+    target.responsibilities = ["负责 AI Agent 产品评测体系建设，能够分析失败案例并推动改进。"]
+
+    questions, missing = _questions(profile, target, [])
+
+    assert missing == []
+    assert questions
+    assert all(item.requirement not in target.required_skills for item in questions)
+    assert any("评测体系" in item.requirement for item in questions)
+
+
 def test_old_failed_tailoring_backfills_empty_questions(tmp_path):
     app = create_app(settings(tmp_path))
     app.state.database.initialize()
@@ -188,7 +207,10 @@ def test_old_failed_tailoring_backfills_empty_questions(tmp_path):
     target.responsibilities = ["具备评测设计能力，能够建立评分标准并分析失败案例。"]
     app.state.database.save_target_job(target)
     tailoring = app.state.tailoring_service.create_tailoring(profile.profile_id, target.target_job_id)
-    tailoring.questions = []
+    tailoring.questions = [TailoringQuestion(
+        question_id="question_bad_benefit", requirement="交通补助",
+        question="岗位要求交通补助，你是否使用过？",
+    )]
     tailoring.status = "FAILED"
     tailoring.task_id = "task_old_failed"
     tailoring.error = "旧任务失败"
@@ -199,6 +221,7 @@ def test_old_failed_tailoring_backfills_empty_questions(tmp_path):
     assert restored.status == "COLLECTING"
     assert restored.task_id is None and restored.error is None
     assert restored.questions
+    assert all(item.requirement != "交通补助" for item in restored.questions)
 
 
 def test_pasted_target_is_profile_scoped_and_link_is_restricted(tmp_path):
