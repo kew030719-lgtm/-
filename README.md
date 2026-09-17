@@ -160,6 +160,8 @@ npm run build                # 输出到 career_radar/static/app/，随后访问
 
 定向简历接口从 `POST /api/target-jobs` 和 `POST /api/resume-tailorings` 开始。已采集岗位直接使用数据库中的岗位快照：可从岗位排名点击“为这个岗位修改简历”，也可在定向简历页面从已采集岗位中选择，不需要再次复制链接；链接和粘贴 JD 仅用于数据库之外的岗位。追问确认后由异步任务生成草稿。草稿返回 `quality_report`，包含相关性、具体性、结构、简洁度、证据覆盖、重复项、预计页数和未覆盖要求；经历条目的标题与日期也必须引用当前经历的证据。`POST /api/resume-drafts/{id}/versions` 保存网页编辑的新版本，`POST /api/resume-drafts/{id}/exports` 生成两套 DOCX/PDF，下载文件仅从本地 `data/exports` 返回。模型生成的每条内容都必须引用当前候选人的证据；未经证实的技能、数字、机构、日期或跨经历拼接会使任务进入 `FAILED_VALIDATION`。脱敏的十组定向简历回归样本位于 `evaluation/tailoring_cases.json`，人工盲评达到 80% 改善率前不得宣称发布验收通过。
 
+定向简历的规划、正文改写和质量评审分别使用独立的输出额度。规划与评审也会为推理模型预留足够的内部思考空间，避免在尚未生成结构化结果前触发较小的默认 token 上限；该额度只影响定向简历阶段，不会放大全局对话的输出长度。
+
 真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。`scripts/generate_evaluation_report.py` 会根据 SQLite 和仓库外的脱敏评测清单生成 JSON/Markdown 发布门槛报告；格式和使用方法见 [evaluation/README.md](evaluation/README.md)。字段存在不等于语义准确，仍需抽查原始岗位。
 
 `scripts/repair_job_fields.py` 用于修复早期解析器把推荐列表混入职责的历史快照，仅处理指定任务。运行前自动备份 SQLite；保留原抓取时间与快照 ID，不将历史文本重解析冒充重新抓取。应在生成分析报告前运行。

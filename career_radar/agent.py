@@ -39,6 +39,14 @@ CHAT_SYSTEM_PROMPT = """你是 CareerRadar 的可对话求职 Agent。使用 Car
 最终只输出 JSON：{"answer":"给用户的中文回复","citations":[{"source_type":"resume|job","source_id":"...","block_id":"..."}],"grounded":true|false}。"""
 
 
+# Reasoning models spend part of the completion budget before emitting the
+# small structured result. 3,000 tokens proved insufficient for planning and
+# review on real resumes, while the actual resume writer already needs 8,000.
+TAILOR_PLAN_MAX_TOKENS = 6000
+TAILOR_WRITE_MAX_TOKENS = 8000
+TAILOR_REVIEW_MAX_TOKENS = 6000
+
+
 class RoleRecommendationsOutput(BaseModel):
     recommendations: list[RoleRecommendation] = Field(min_length=3, max_length=3)
 
@@ -206,7 +214,7 @@ class AgentService:
                 database_path=self.settings.database_path, tool_mode="tailoring",
                 profile_id=profile.profile_id, target_job_id=target.target_job_id,
                 tailoring_id=tailoring.tailoring_id,
-            ), timeout_seconds=150, max_tokens=3000, api_max_retries=1,
+            ), timeout_seconds=150, max_tokens=TAILOR_PLAN_MAX_TOKENS, api_max_retries=1,
         )
         if not registered:
             raise RuntimeError("CareerRadar 定向简历工具未加载")
@@ -305,7 +313,7 @@ resume_entries，且 bullets 只能引用该经历自己的 evidence_ids。不�
             output, _tools, _source = await self._run_structured(
                 writer_prompt, f"tailor-write-{tailoring.tailoring_id}-{attempt + 1}", ResumeWritingOutput,
                 system_prompt="你是 CareerRadar 定向简历改写 Agent，只能重组有证据的真实经历，严格返回行协议。",
-                timeout_seconds=300, max_tokens=8000, api_max_retries=1,
+                timeout_seconds=300, max_tokens=TAILOR_WRITE_MAX_TOKENS, api_max_retries=1,
             )
             raw: dict[str, Any] = {"headline": target.title, "summary": [], "skills": [], "entries": []}
             entries: dict[str, dict[str, Any]] = {}
@@ -345,7 +353,7 @@ REVISION|可执行的改写要求
                 review_prompt, f"tailor-review-{tailoring.tailoring_id}-{attempt + 1}",
                 ResumeQualityReviewTextOutput,
                 system_prompt="你是严格的中文简历质量评审，只评审，不添加候选人事实，严格返回行协议。",
-                timeout_seconds=180, max_tokens=3000, api_max_retries=1,
+                timeout_seconds=180, max_tokens=TAILOR_REVIEW_MAX_TOKENS, api_max_retries=1,
             )
             parsed_review = ResumeQualityReviewOutput()
             for line in review.text.splitlines():

@@ -316,14 +316,16 @@ def test_model_tailoring_preserves_cited_entries_and_runs_quality_review(tmp_pat
         source_entry = next(item for item in public.resume_entries if item.kind == "skills")
         source = next(item for item in public.evidence if item.block_id in source_entry.evidence_ids)
         writer_calls = 0
+        token_limits = {}
 
-        async def fake_run(_prompt, _task_id, output_type, **_kwargs):
+        async def fake_run(_prompt, _task_id, output_type, **kwargs):
             nonlocal writer_calls
             from career_radar.agent import (
                 ResumePlanOutput,
                 ResumeQualityReviewTextOutput,
                 ResumeWritingOutput,
             )
+            token_limits.setdefault(output_type, []).append(kwargs.get("max_tokens"))
             if output_type is ResumePlanOutput:
                 return ResumePlanOutput.model_validate({
                     "requirements": [{"requirement": "Python", "importance": 100,
@@ -362,6 +364,17 @@ def test_model_tailoring_preserves_cited_entries_and_runs_quality_review(tmp_pat
         assert version.sections[0].entries[0].evidence_ids == [source.block_id]
         assert version.quality_report.passed is True
         assert writer_calls == 3 and validation_calls == 3
+        from career_radar.agent import (
+            ResumePlanOutput,
+            ResumeQualityReviewTextOutput,
+            ResumeWritingOutput,
+            TAILOR_PLAN_MAX_TOKENS,
+            TAILOR_REVIEW_MAX_TOKENS,
+            TAILOR_WRITE_MAX_TOKENS,
+        )
+        assert token_limits[ResumePlanOutput] == [TAILOR_PLAN_MAX_TOKENS]
+        assert token_limits[ResumeWritingOutput] == [TAILOR_WRITE_MAX_TOKENS] * 3
+        assert token_limits[ResumeQualityReviewTextOutput] == [TAILOR_REVIEW_MAX_TOKENS]
 
     asyncio.run(run())
 
