@@ -19,7 +19,7 @@ export default function Panel1Resume({ active, busy, onUpload }: Props) {
         <span>01</span>
         <div>
           <h2 id="upload-title">提交你的简历</h2>
-          <p>支持 10 MB 以内的 PDF、DOCX，或直接粘贴文本。</p>
+          <p>支持 10 MB 以内的 PDF（含扫描版）、DOCX，或直接粘贴文本。</p>
         </div>
       </div>
       <form
@@ -43,7 +43,7 @@ export default function Panel1Resume({ active, busy, onUpload }: Props) {
           />
           <span className="upload-icon">↥</span>
           <b>{fileName ?? '选择简历文件'}</b>
-          <small>点击选择 PDF 或 DOCX</small>
+          <small>点击选择 PDF（含扫描版）或 DOCX</small>
         </label>
         <div className="or"><span>或</span></div>
         <label className="text-box">

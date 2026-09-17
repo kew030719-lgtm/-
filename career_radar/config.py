@@ -30,6 +30,7 @@ class Settings:
     api_key: str
     crawl_delay_seconds: float
     crawl_max_jobs: int
+    vision_model_name: str = ""
     # Defaults keep existing callers working; both are read per turn, so a
     # dataclass field is enough and no migration is needed.
     chat_history_limit: int = 24
@@ -49,6 +50,7 @@ class Settings:
             api_key=os.getenv("TOKEN_PLAN_API_KEY", "").strip(),
             crawl_delay_seconds=max(0, float(os.getenv("CRAWL_DELAY_SECONDS", "10"))),
             crawl_max_jobs=min(20, max(1, int(os.getenv("CRAWL_MAX_JOBS", "20")))),
+            vision_model_name=os.getenv("VISION_MODEL_NAME", "").strip(),
             chat_history_limit=max(1, int(os.getenv("CHAT_HISTORY_LIMIT", "24"))),
             # 0 disables compaction, which is the shipped default: it is an
             # optimisation, not part of the reply contract.

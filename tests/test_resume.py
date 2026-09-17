@@ -47,7 +47,7 @@ def test_scanned_pdf_empty_and_oversized_are_rejected():
     writer = PdfWriter()
     writer.add_blank_page(300, 300)
     writer.write(stream)
-    with pytest.raises(ResumeError, match="OCR"):
+    with pytest.raises(ResumeError, match="视觉模型"):
         extract_resume_text(stream.getvalue(), "scan.pdf", "application/pdf")
     with pytest.raises(ResumeError, match="10 MB"):
         extract_resume_text(b"x" * (MAX_UPLOAD_BYTES + 1), "resume.pdf", "application/pdf")

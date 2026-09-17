@@ -25,10 +25,14 @@ def settings(tmp_path):
 
 def test_local_settings_never_write_or_return_api_key(tmp_path):
     store = LocalSettingsStore(settings(tmp_path), MemorySecretStore())
-    store.update(model_base_url="https://models.example/v1", model_name="graduate-model", api_key="super-secret")
+    store.update(
+        model_base_url="https://models.example/v1", model_name="graduate-model",
+        vision_model_name="vision-model", api_key="super-secret",
+    )
     assert store.public()["api_key_configured"] is True
     assert "super-secret" not in store.path.read_text(encoding="utf-8")
     assert "api_key" not in store.public()
+    assert store.public()["vision_model_name"] == "vision-model"
 
 
 def test_graduate_metadata_is_explicit_and_unknown_stays_unknown():
@@ -83,12 +87,13 @@ async def _settings_metrics_export_and_delete_api(tmp_path):
             assert (await client.post("/api/browser-helper/heartbeat")).status_code == 200
             assert (await client.get("/api/browser-helper/status")).json()["connected"] is True
             updated = await client.put("/api/settings/model", json={
-                "model_base_url": "https://models.example/v1", "model_name": "model-x", "api_key": "secret",
+                "model_base_url": "https://models.example/v1", "model_name": "model-x",
+                "vision_model_name": "vision-x", "api_key": "secret",
             })
             assert updated.status_code == 200
             assert updated.json() == {
                 "model_base_url": "https://models.example/v1", "model_name": "model-x",
-                "api_key_configured": True, "data_dir": str(tmp_path),
+                "vision_model_name": "vision-x", "api_key_configured": True, "data_dir": str(tmp_path),
             }
             app.state.database.create_task("run_metric", "discovery", {"sites": ["boss"]})
             app.state.database.initialize_collection_metric("run_metric", ["boss"])

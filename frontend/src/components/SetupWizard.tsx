@@ -5,6 +5,7 @@ import { api, post, putJson } from '../api'
 interface SettingsView {
   model_base_url: string
   model_name: string
+  vision_model_name: string
   api_key_configured: boolean
   data_dir: string
 }
@@ -43,7 +44,8 @@ export default function SetupWizard() {
       const saved = await putJson<SettingsView>('/api/settings/model', {
         model_base_url: settings.model_base_url,
         model_name: settings.model_name,
-        api_key: apiKey,
+        vision_model_name: settings.vision_model_name,
+        api_key: apiKey.trim() || undefined,
       })
       await post<{ ok: boolean }>('/api/settings/model/test')
       setSettings(saved)
@@ -63,13 +65,14 @@ export default function SetupWizard() {
         <p>CareerRadar 本地运行；岗位与简历只会按功能需要发送给你配置的模型服务。</p>
         <label>服务地址<input value={settings.model_base_url} onChange={(e) => setSettings({...settings, model_base_url: e.target.value})} /></label>
         <label>模型名称<input value={settings.model_name} onChange={(e) => setSettings({...settings, model_name: e.target.value})} /></label>
+        <label>视觉模型名称（扫描版 PDF）<input placeholder="例如支持图片输入的视觉模型" value={settings.vision_model_name} onChange={(e) => setSettings({...settings, vision_model_name: e.target.value})} /></label>
         <label>模型密钥<input type="password" autoComplete="off" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></label>
         <p className={browser?.connected ? 'setup-ok' : 'setup-warning'}>
           Chrome 助手：{browser?.connected ? '已连接' : browser?.help || '未检测到'}
         </p>
         {message ? <p className="setup-message">{message}</p> : null}
         <div className="setup-actions">
-          <button className="primary" type="button" disabled={!apiKey.trim()} onClick={() => void saveAndTest()}>保存并测试</button>
+          <button className="primary" type="button" disabled={!settings.api_key_configured && !apiKey.trim()} onClick={() => void saveAndTest()}>保存并测试</button>
           <button className="ghost" type="button" onClick={() => {
             localStorage.setItem('career-radar-setup-dismissed', '1')
             setOpen(false)

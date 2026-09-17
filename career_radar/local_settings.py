@@ -80,7 +80,8 @@ class LocalSettingsStore:
         if self.path.is_file():
             try:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
-                values = {key: str(raw[key]).strip() for key in ("model_base_url", "model_name") if raw.get(key)}
+                values = {key: str(raw[key]).strip() for key in
+                          ("model_base_url", "model_name", "vision_model_name") if raw.get(key)}
             except (OSError, ValueError, TypeError):
                 values = {}
         return replace(base, **values, api_key=self.secret_store.get() or base.api_key)
@@ -89,13 +90,16 @@ class LocalSettingsStore:
         return {
             "model_base_url": self.settings.model_base_url,
             "model_name": self.settings.model_name,
+            "vision_model_name": self.settings.vision_model_name,
             "api_key_configured": bool(self.secret_store.get()),
             "data_dir": str(self.settings.data_dir),
         }
 
-    def update(self, *, model_base_url: str, model_name: str, api_key: str | None = None) -> Settings:
+    def update(self, *, model_base_url: str, model_name: str,
+               vision_model_name: str | None = None, api_key: str | None = None) -> Settings:
         base_url = model_base_url.strip().rstrip("/")
         name = model_name.strip()
+        vision_name = self.settings.vision_model_name if vision_model_name is None else vision_model_name.strip()
         if not base_url.startswith(("https://", "http://127.0.0.1:", "http://localhost:")):
             raise ValueError("模型服务地址必须使用 HTTPS，或指向本机 localhost")
         if not name:
@@ -107,10 +111,14 @@ class LocalSettingsStore:
                 self.secret_store.delete()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
-            json.dumps({"model_base_url": base_url, "model_name": name}, ensure_ascii=False, indent=2) + "\n",
+            json.dumps({
+                "model_base_url": base_url, "model_name": name,
+                "vision_model_name": vision_name,
+            }, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         self.settings.model_base_url = base_url
         self.settings.model_name = name
+        self.settings.vision_model_name = vision_name
         self.settings.api_key = self.secret_store.get()
         return self.settings

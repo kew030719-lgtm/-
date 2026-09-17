@@ -41,6 +41,10 @@ class ResumeGenerationError(ResumeError):
     pass
 
 
+class ScannedResumeError(ResumeError):
+    """The PDF is valid but has no usable text layer and needs visual OCR."""
+
+
 def _is_docx(data: bytes) -> bool:
     if not data.startswith(b"PK"):
         return False
@@ -65,7 +69,7 @@ def extract_resume_text(data: bytes, filename: str, declared_type: str) -> str:
         except Exception as exc:
             raise ResumeError("PDF 已损坏或无法解析") from exc
         if len(text.strip()) < 30:
-            raise ResumeError("未提取到足够文字，扫描版 PDF 暂不支持 OCR，请粘贴简历文本")
+            raise ScannedResumeError("PDF 没有可用文字层，需要视觉模型识别")
         return text
     if suffix == ".docx":
         valid_types = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}

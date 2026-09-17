@@ -30,8 +30,9 @@ from .resume import (
     ResumeError,
     build_profile,
     extract_candidate_contact,
-    extract_resume_text,
+    ScannedResumeError, extract_resume_text,
 )
+from .vision import VisionResumeReader
 from .schemas import (
     ChatActionKind,
     ResumeDraftVersion,
@@ -122,6 +123,7 @@ class BrowserProgress(BaseModel):
 class ModelSettingsUpdate(BaseModel):
     model_base_url: str = Field(min_length=8, max_length=2000)
     model_name: str = Field(min_length=1, max_length=200)
+    vision_model_name: str = Field(default="", max_length=200)
     api_key: str | None = Field(default=None, max_length=4000)
 
 
@@ -178,6 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     tailoring_service = TailoringService(database, agent, settings.data_dir)
     interview_service = InterviewService(database, agent)
     apply_service = ApplyService(database, agent)
+    vision_reader = VisionResumeReader(settings)
     worker = TaskQueue(
         database, agent, crawl_delay=settings.crawl_delay_seconds,
         max_jobs=settings.crawl_max_jobs, tailoring_service=tailoring_service,
@@ -210,6 +213,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.tailoring_service = tailoring_service
     app.state.interview_service = interview_service
     app.state.apply_service = apply_service
+    app.state.vision_reader = vision_reader
     app.state.settings = settings
     app.state.setting_store = setting_store
 
@@ -314,7 +318,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 upload = form.get("file")
                 if upload is not None and hasattr(upload, "read") and getattr(upload, "filename", ""):
                     data = await upload.read(10 * 1024 * 1024 + 1)
-                    text = extract_resume_text(data, upload.filename, upload.content_type or "")
+                    try:
+                        text = extract_resume_text(data, upload.filename, upload.content_type or "")
+                    except ScannedResumeError:
+                        text = await vision_reader.extract(data)
             profile = build_profile(text)
             contact = extract_candidate_contact(profile)
             profile = await agent.recommend_roles(profile)

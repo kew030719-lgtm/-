@@ -15,6 +15,7 @@ dependencies = [
   "pydantic-ai-slim[openai,mcp]>=1.107,<2",
   "langgraph>=1.2,<2",
   "pypdf>=5,<7",
+  "PyMuPDF>=1.25,<2",
   "python-docx>=1.1,<2",
   "python-dotenv>=1,<2",
   "python-multipart>=0.0.20,<1",
