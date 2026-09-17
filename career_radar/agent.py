@@ -200,24 +200,46 @@ class AgentService:
                             ) -> "ResumeDraftVersion":
         from .schemas import ResumeDraftVersion
 
+        terms = [str(item).lower() for item in target.required_skills]
+        terms.extend(re.findall(
+            r"[A-Za-z][A-Za-z0-9+#.]{1,20}", " ".join(target.responsibilities),
+        ))
+        ranked_evidence = sorted(
+            profile.evidence,
+            key=lambda item: (
+                sum(1 for term in terms if term and term in item.quote.lower()),
+                item.section in {"项目", "经历", "用户补充"},
+            ), reverse=True,
+        )[:36]
+        planning_context = {
+            "target_job": {
+                "company": target.company, "title": target.title,
+                "responsibilities": target.responsibilities[:15],
+                "required_skills": target.required_skills[:15],
+            },
+            "candidate": {
+                "skills": profile.skills, "experience_years": profile.experience_years,
+                "education": profile.education,
+                "resume_entries": [item.model_dump() for item in profile.resume_entries],
+                "evidence": [item.model_dump() for item in ranked_evidence],
+            },
+            "tailoring": {
+                "missing_requirements": tailoring.missing_requirements,
+                "questions": [item.model_dump() for item in tailoring.questions],
+            },
+        }
         plan_prompt = """你不是重新创作候选人的经历，而是为目标岗位选择、排序和组织已有事实。
-只调用一次 read_tailoring_context，然后输出岗位要求与候选人证据的对齐方案：
+根据输入上下文输出岗位要求与候选人证据的对齐方案：
 1. requirements 按重要性列出要求，match 只能是 strong、weak、missing，并给出候选人 evidence_ids；
 2. selected_entry_ids、de_emphasized_entry_ids、omitted_entry_ids 只能使用 resume_entries 的 entry_id；
 3. strategy 简述一页简历的编排策略。
 不得改写事实，不得生成简历正文，不得把不同公司或项目的证据合并。无证据要求必须标为 missing。
-当前 tailoring_id：""" + tailoring.tailoring_id
-        plan, registered, runtime_source = await self._run_structured(
+输入：\n""" + json.dumps(planning_context, ensure_ascii=False)
+        plan, _registered, runtime_source = await self._run_structured(
             plan_prompt, f"tailor-plan-{tailoring.tailoring_id}", ResumePlanOutput,
             system_prompt="你是 CareerRadar 简历规划 Agent，只做岗位与证据对齐，只返回指定 JSON。",
-            tool_context=ToolContext(
-                database_path=self.settings.database_path, tool_mode="tailoring",
-                profile_id=profile.profile_id, target_job_id=target.target_job_id,
-                tailoring_id=tailoring.tailoring_id,
-            ), timeout_seconds=150, max_tokens=TAILOR_PLAN_MAX_TOKENS, api_max_retries=1,
+            timeout_seconds=150, max_tokens=TAILOR_PLAN_MAX_TOKENS, api_max_retries=1,
         )
-        if not registered:
-            raise RuntimeError("CareerRadar 定向简历工具未加载")
         evidence = {item.block_id: item for item in profile.evidence}
         entry_lookup = {item.entry_id: item for item in profile.resume_entries}
         def normalize_bullet(raw: object, index: int) -> dict:

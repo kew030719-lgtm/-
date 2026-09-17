@@ -327,11 +327,14 @@ def test_model_tailoring_preserves_cited_entries_and_runs_quality_review(tmp_pat
             )
             token_limits.setdefault(output_type, []).append(kwargs.get("max_tokens"))
             if output_type is ResumePlanOutput:
+                assert kwargs.get("tool_context") is None
+                assert "read_tailoring_context" not in _prompt
+                assert target.title in _prompt and source.block_id in _prompt
                 return ResumePlanOutput.model_validate({
                     "requirements": [{"requirement": "Python", "importance": 100,
                                       "match": "strong", "evidence_ids": [source.block_id]}],
                     "selected_entry_ids": [source_entry.entry_id], "strategy": "突出后端技能",
-                }), ["career_radar__read_tailoring_context"], "langgraph"
+                }), [], "langgraph"
             if output_type is ResumeQualityReviewTextOutput:
                 return ResumeQualityReviewTextOutput(
                     text="SCORES|90|88|92|90\nPASS|true",

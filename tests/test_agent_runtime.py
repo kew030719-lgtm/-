@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic_ai import PromptedOutput
+
 from career_radar.agent import ChatAgentOutput
 from career_radar.agent_runtime import HybridAgentRuntime
 from career_radar.config import Settings
@@ -78,3 +80,14 @@ def test_runs_without_a_tool_context_register_no_tools(tmp_path):
     ))
     assert result.registered_tools == []
     assert result.workflow_status == "SUCCEEDED"
+
+
+def test_deepseek_flash_without_tools_uses_prompted_output(tmp_path):
+    active_settings = settings(tmp_path)
+    active_settings.model_name = "deepseek-flash"
+    runtime = HybridAgentRuntime(active_settings)
+
+    output_type = runtime._output_type(ChatAgentOutput, [])
+
+    assert isinstance(output_type, PromptedOutput)
+    assert runtime._output_type(ChatAgentOutput, [object()]) is ChatAgentOutput

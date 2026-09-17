@@ -162,6 +162,8 @@ npm run build                # 输出到 career_radar/static/app/，随后访问
 
 定向简历的规划、正文改写和质量评审分别使用独立的输出额度。规划与评审也会为推理模型预留足够的内部思考空间，避免在尚未生成结构化结果前触发较小的默认 token 上限；该额度只影响定向简历阶段，不会放大全局对话的输出长度。
 
+`deepseek-flash` 的思考模式不接受 PydanticAI 默认的强制输出工具选择。无业务工具的定向简历阶段会改用提示词 JSON 输出，再由同一 Pydantic 类型在本地校验；规划所需的脱敏简历证据和岗位上下文由后端直接注入，不发送 `tool_choice`，联系方式仍不会进入模型请求。
+
 真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。`scripts/generate_evaluation_report.py` 会根据 SQLite 和仓库外的脱敏评测清单生成 JSON/Markdown 发布门槛报告；格式和使用方法见 [evaluation/README.md](evaluation/README.md)。字段存在不等于语义准确，仍需抽查原始岗位。
 
 `scripts/repair_job_fields.py` 用于修复早期解析器把推荐列表混入职责的历史快照，仅处理指定任务。运行前自动备份 SQLite；保留原抓取时间与快照 ID，不将历史文本重解析冒充重新抓取。应在生成分析报告前运行。

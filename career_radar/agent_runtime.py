@@ -9,7 +9,7 @@ import httpx
 from langgraph.graph import END, START, StateGraph
 from openai import AsyncOpenAI
 from pydantic import TypeAdapter
-from pydantic_ai import Agent
+from pydantic_ai import Agent, PromptedOutput
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import UsageLimits
@@ -120,7 +120,8 @@ class HybridAgentRuntime:
             if deps is not None:
                 agent_kwargs["deps_type"] = ToolContext
             agent = Agent(
-                model, output_type=state["output_type"], instructions=state["system_prompt"],
+                model, output_type=self._output_type(state["output_type"], tools),
+                instructions=state["system_prompt"],
                 tools=tools, toolsets=state.get("toolsets") or [], retries=1,
                 model_settings=model_settings, **agent_kwargs,
             )
@@ -131,6 +132,12 @@ class HybridAgentRuntime:
             return result.output
         finally:
             await http_client.aclose()
+
+    def _output_type(self, output_type: Any, tools: list[Any]) -> Any:
+        """Avoid forced output tools rejected by deepseek-flash thinking mode."""
+        if self.settings.model_name.lower().startswith("deepseek-flash") and not tools:
+            return PromptedOutput(output_type)
+        return output_type
 
     @staticmethod
     async def _route_after_agent(state: WorkflowState) -> str:
