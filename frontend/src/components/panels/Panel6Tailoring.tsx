@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { provenanceLabel, targetSourceLabel } from '../../lib/format'
 import type {
+  JobSnapshot,
   ResumeBullet,
   ResumeDraftBundle,
   ResumeDraftVersion,
@@ -13,6 +14,7 @@ import type {
 
 interface Props {
   active: boolean
+  jobs: JobSnapshot[]
   targetJob: TargetJob | null
   tailoring: ResumeTailoring | null
   tailoringBusy: boolean
@@ -24,6 +26,7 @@ interface Props {
   exportError: string | null
   resumeBusy: boolean
   onToast: (message: string) => void
+  onSelectStoredJob: (snapshotId: string) => Promise<void>
   onSubmitTarget: (fields: { company: string; title: string; content: string; url: string }) => Promise<void>
   onCaptureTarget: (url: string) => Promise<void>
   onSubmitAnswers: (answers: Record<string, string | null>) => Promise<void>
@@ -35,13 +38,14 @@ interface Props {
 
 export default function Panel6Tailoring(props: Props) {
   const {
-    active, targetJob, tailoring, tailoringBusy, tailorNotice, draftBundle, draft,
+    active, jobs, targetJob, tailoring, tailoringBusy, tailorNotice, draftBundle, draft,
     resumeTemplate, exportLinks, exportError, resumeBusy,
-    onToast, onSubmitTarget, onCaptureTarget, onSubmitAnswers,
+    onToast, onSelectStoredJob, onSubmitTarget, onCaptureTarget, onSubmitAnswers,
     onSelectVersion, onSetTemplate, onSaveVersion, onExport,
   } = props
 
   const [company, setCompany] = useState('')
+  const [storedSnapshotId, setStoredSnapshotId] = useState('')
   const [title, setTitle] = useState('')
   const [url, setUrl] = useState('')
   const [content, setContent] = useState('')
@@ -52,6 +56,12 @@ export default function Panel6Tailoring(props: Props) {
   useEffect(() => {
     setEdited(draft ? (JSON.parse(JSON.stringify(draft)) as ResumeDraftVersion) : null)
   }, [draft])
+
+  useEffect(() => {
+    if (!jobs.some((job) => job.snapshot_id === storedSnapshotId)) {
+      setStoredSnapshotId(jobs[0]?.snapshot_id ?? '')
+    }
+  }, [jobs, storedSnapshotId])
 
   useEffect(() => {
     const next: Record<string, boolean> = {}
@@ -104,7 +114,12 @@ export default function Panel6Tailoring(props: Props) {
 
   const notice = tailorNotice ?? (targetJob
     ? null
-    : { title: '尚未选择目标岗位', body: '从岗位排名选择，或在下方粘贴 JD、填写公开职位链接。' })
+    : {
+        title: '尚未选择目标岗位',
+        body: jobs.length
+          ? '直接选择本次采集并已保存的岗位，无需复制链接。'
+          : '当前任务还没有已保存的岗位，可以使用数据库外的职位链接或 JD。',
+      })
 
   return (
     <section
@@ -133,41 +148,73 @@ export default function Panel6Tailoring(props: Props) {
                 ? `要求 ${targetJob.required_skills.join('、')}`
                 : '技能要求待从原文判断'}
             </p>
+            {targetJob.source_type === 'snapshot' ? (
+              <p>已读取数据库中的岗位详情，无需复制岗位链接。</p>
+            ) : null}
           </>
         ) : null}
       </div>
 
-      <form
-        id="target-job-form"
-        className="target-job-form"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void onSubmitTarget({ company, title, content, url })
-        }}
-      >
-        <label>
-          <span>目标公司</span>
-          <input maxLength={200} placeholder="例如 星图科技" value={company} onChange={(e) => setCompany(e.target.value)} />
-        </label>
-        <label>
-          <span>岗位名称</span>
-          <input maxLength={200} placeholder="例如 Python 后端工程师" value={title} onChange={(e) => setTitle(e.target.value)} />
-        </label>
-        <label className="wide">
-          <span>公开职位链接</span>
-          <input type="url" placeholder="https://…（岗位详情页链接）" value={url} onChange={(e) => setUrl(e.target.value)} />
-        </label>
-        <label className="wide">
-          <span>岗位描述 JD</span>
-          <textarea rows={6} maxLength={80000} placeholder="粘贴岗位职责、必需技能和任职要求……" value={content} onChange={(e) => setContent(e.target.value)} />
-        </label>
-        <div className="tailor-actions wide">
-          <button className="secondary" id="capture-target" type="button" onClick={() => void onCaptureTarget(url)}>
-            读取职位链接
+      {!targetJob && jobs.length ? (
+        <div className="stored-target-picker">
+          <label htmlFor="stored-target-job">从已采集岗位中选择</label>
+          <select
+            id="stored-target-job"
+            value={storedSnapshotId}
+            onChange={(event) => setStoredSnapshotId(event.target.value)}
+          >
+            {jobs.map((job) => (
+              <option key={job.snapshot_id} value={job.snapshot_id}>
+                {job.company} · {job.title}{job.city ? ` · ${job.city}` : ''}
+              </option>
+            ))}
+          </select>
+          <button
+            className="primary compact"
+            type="button"
+            disabled={!storedSnapshotId || tailoringBusy}
+            onClick={() => void onSelectStoredJob(storedSnapshotId)}
+          >
+            使用这个岗位生成简历
           </button>
-          <button className="primary compact" type="submit">使用这份 JD</button>
         </div>
-      </form>
+      ) : null}
+
+      <details className="external-target" open={!targetJob && jobs.length === 0}>
+        <summary>{targetJob ? '改用数据库之外的岗位' : '使用数据库之外的岗位'}</summary>
+        <p>仅当目标岗位未被 CareerRadar 采集时，才需要填写链接或粘贴 JD。</p>
+        <form
+          id="target-job-form"
+          className="target-job-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void onSubmitTarget({ company, title, content, url })
+          }}
+        >
+          <label>
+            <span>目标公司</span>
+            <input maxLength={200} placeholder="例如 星图科技" value={company} onChange={(e) => setCompany(e.target.value)} />
+          </label>
+          <label>
+            <span>岗位名称</span>
+            <input maxLength={200} placeholder="例如 Python 后端工程师" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </label>
+          <label className="wide">
+            <span>公开职位链接</span>
+            <input type="url" placeholder="https://…（岗位详情页链接）" value={url} onChange={(e) => setUrl(e.target.value)} />
+          </label>
+          <label className="wide">
+            <span>岗位描述 JD</span>
+            <textarea rows={6} maxLength={80000} placeholder="粘贴岗位职责、必需技能和任职要求……" value={content} onChange={(e) => setContent(e.target.value)} />
+          </label>
+          <div className="tailor-actions wide">
+            <button className="secondary" id="capture-target" type="button" onClick={() => void onCaptureTarget(url)}>
+              读取职位链接
+            </button>
+            <button className="primary compact" type="submit">使用这份 JD</button>
+          </div>
+        </form>
+      </details>
 
       <form
         id="tailoring-questions"

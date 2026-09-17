@@ -158,7 +158,7 @@ npm run build                # 输出到 career_radar/static/app/，随后访问
 
 面试准备接口从 `POST /api/interview-preps` 开始，异步生成后由 `GET /api/interview-preps/{id}` 读取，也可用 `GET /api/jobs/{snapshot_id}/interview-prep?profile_id=…` 取某个岗位最近一次的准备。与 `Comparison.action_plan` 不同，它是**按岗位**而非针对前三名的统一计划。校验规则有一条刻意的例外：针对岗位缺失技能提出的问题，其证据来自岗位原文而非候选人简历，否则任何关于能力差距的提问都会因为"简历里没有"而被判为无据。
 
-定向简历接口从 `POST /api/target-jobs` 和 `POST /api/resume-tailorings` 开始，追问确认后由异步任务生成草稿。草稿返回 `quality_report`，包含相关性、具体性、结构、简洁度、证据覆盖、重复项、预计页数和未覆盖要求；经历条目的标题与日期也必须引用当前经历的证据。`POST /api/resume-drafts/{id}/versions` 保存网页编辑的新版本，`POST /api/resume-drafts/{id}/exports` 生成两套 DOCX/PDF，下载文件仅从本地 `data/exports` 返回。模型生成的每条内容都必须引用当前候选人的证据；未经证实的技能、数字、机构、日期或跨经历拼接会使任务进入 `FAILED_VALIDATION`。脱敏的十组定向简历回归样本位于 `evaluation/tailoring_cases.json`，人工盲评达到 80% 改善率前不得宣称发布验收通过。
+定向简历接口从 `POST /api/target-jobs` 和 `POST /api/resume-tailorings` 开始。已采集岗位直接使用数据库中的岗位快照：可从岗位排名点击“为这个岗位修改简历”，也可在定向简历页面从已采集岗位中选择，不需要再次复制链接；链接和粘贴 JD 仅用于数据库之外的岗位。追问确认后由异步任务生成草稿。草稿返回 `quality_report`，包含相关性、具体性、结构、简洁度、证据覆盖、重复项、预计页数和未覆盖要求；经历条目的标题与日期也必须引用当前经历的证据。`POST /api/resume-drafts/{id}/versions` 保存网页编辑的新版本，`POST /api/resume-drafts/{id}/exports` 生成两套 DOCX/PDF，下载文件仅从本地 `data/exports` 返回。模型生成的每条内容都必须引用当前候选人的证据；未经证实的技能、数字、机构、日期或跨经历拼接会使任务进入 `FAILED_VALIDATION`。脱敏的十组定向简历回归样本位于 `evaluation/tailoring_cases.json`，人工盲评达到 80% 改善率前不得宣称发布验收通过。
 
 真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。`scripts/generate_evaluation_report.py` 会根据 SQLite 和仓库外的脱敏评测清单生成 JSON/Markdown 发布门槛报告；格式和使用方法见 [evaluation/README.md](evaluation/README.md)。字段存在不等于语义准确，仍需抽查原始岗位。
 

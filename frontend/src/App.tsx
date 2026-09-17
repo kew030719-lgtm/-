@@ -116,6 +116,7 @@ export default function App() {
 
           <Panel6Tailoring
             active={state.step === 6}
+            jobs={state.jobs}
             targetJob={state.targetJob}
             tailoring={state.tailoring}
             tailoringBusy={state.tailoringBusy}
@@ -127,6 +128,7 @@ export default function App() {
             exportError={state.exportError}
             resumeBusy={state.resumeBusy}
             onToast={actions.toast}
+            onSelectStoredJob={actions.beginTailoring}
             onSubmitTarget={actions.submitTargetForm}
             onCaptureTarget={actions.captureTargetUrl}
             onSubmitAnswers={actions.submitTailoringAnswers}
