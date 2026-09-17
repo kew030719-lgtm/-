@@ -43,6 +43,7 @@ async def selected_site_queue(tmp_path):
             allowed_hosts = get_site(site_key).hosts
             assert plan["queue"]
             assert all(urlsplit(item["url"]).hostname in allowed_hosts for item in plan["queue"])
+            assert all(item["render_wait_ms"] == get_site(site_key).render_wait_ms for item in plan["queue"])
             queries = {
                 next(value[0] for key, value in parse_qs(urlsplit(item["url"]).query).items()
                      if key in {"query", "kw", "keyword"})

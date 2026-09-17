@@ -549,7 +549,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             except CrawlError:
                                 # This site does not serve that city; skip just this pair.
                                 continue
-                            searches.append({"url": url, "city": city, "kind": "search", "site": site_key})
+                            searches.append({
+                                "url": url, "city": city, "kind": "search", "site": site_key,
+                                "render_wait_ms": adapter.render_wait_ms,
+                            })
         if not searches:
             raise HTTPException(422, "所选站点都不支持当前城市")
         database.update_task(run_id, status="RUNNING", message="浏览器助手已接单，正在自动搜索岗位")

@@ -220,6 +220,11 @@ async function tick(completedTabId){
       scheduleTick(Date.now()+500);
       return;
     }
+    const renderWait=Math.max(0,Number(item.render_wait_ms||0));
+    if(Date.now()-job.startedAt<renderWait){
+      scheduleTick(job.startedAt+renderWait);
+      return;
+    }
     if(!CareerQueue.allowed(job,tab.url))throw new Error('采集页跳转到其他域名，已暂停');
     const [{result:page}]=await chrome.scripting.executeScript({target:{tabId:job.tabId},func:readPage});
     if(CareerQueue.isLogin(job,page.url))throw new Error('请在采集标签页完成登录，然后点击扩展中的继续任务');

@@ -6,7 +6,7 @@ const path=require('node:path');
 const dir=path.join(__dirname,'../browser-extension');
 function harness(){
   const state={enabled:true}, calls=[], posts=[];
-  let status='QUEUED', pageKind='search', fail=false, networkDown=false, taskMissing=false, now=0, count=0, taskAllow=true, currentUrl='';
+  let status='QUEUED', pageKind='search', fail=false, networkDown=false, taskMissing=false, now=0, count=0, taskAllow=true, renderWait=0, currentUrl='';
   const listeners={};
   const scheduled=[];
   const chrome={storage:{local:{get:async()=>structuredClone(state),set:async data=>Object.assign(state,structuredClone(data)),remove:async key=>delete state[key]}},
@@ -20,7 +20,7 @@ function harness(){
     if(options&&options.method==='POST')posts.push(url);
     if(taskMissing&&url.includes('/api/tasks/'))return{ok:false,status:404,json:async()=>({detail:'任务不存在'})};
     if(url.endsWith('/pending'))data={task_id:!taskMissing&&status==='QUEUED'?'task_test':null};
-    else if(url.endsWith('/start')){status='RUNNING';data={task_id:'task_test',queue:[{url:'https://www.zhipin.com/web/geek/job?page=1',city:'北京',kind:'search'},{url:'https://www.zhipin.com/web/geek/job?page=2',city:'北京',kind:'search'}],interval_ms:10000,max_jobs:2,allow:{boss:{hosts:['www.zhipin.com','m.zhipin.com'],path_pattern:'/job_detail/[A-Za-z0-9_-]+\\.html',login_pattern:'/web/user|/login'}}};}
+    else if(url.endsWith('/start')){status='RUNNING';data={task_id:'task_test',queue:[{url:'https://www.zhipin.com/web/geek/job?page=1',city:'北京',kind:'search',render_wait_ms:renderWait},{url:'https://www.zhipin.com/web/geek/job?page=2',city:'北京',kind:'search',render_wait_ms:renderWait}],interval_ms:10000,max_jobs:2,allow:{boss:{hosts:['www.zhipin.com','m.zhipin.com'],path_pattern:'/job_detail/[A-Za-z0-9_-]+\\.html',login_pattern:'/web/user|/login'}}};}
     else if(url.includes('/api/tasks/'))data={status,payload:{sites:['boss'],...(taskAllow?{allow:{boss:{hosts:['www.zhipin.com'],path_pattern:'/job_detail/[A-Za-z0-9_-]+\\.html',login_pattern:'/web/user'}}}:{})}};
     else if(url.endsWith('/progress')){status=JSON.parse(options.body).status;}
     else if(url.endsWith('/api/browser-search-pages'))data={links:['https://www.zhipin.com/job_detail/a.html?ka=1','https://www.zhipin.com/job_detail/a.html?ka=2','https://www.zhipin.com/job_detail/b.html','https://evil.test/job_detail/c.html']};
@@ -34,7 +34,7 @@ function harness(){
   let timerId=0;
   function reload(){context=vm.createContext({chrome,fetch,URL,AbortSignal,Date:{now:()=>now},console,setTimeout:(fn,delay)=>{scheduled.push(delay);return++timerId;},clearTimeout:()=>{},importScripts:file=>vm.runInContext(fs.readFileSync(path.join(dir,file),'utf8'),context)});vm.runInContext(fs.readFileSync(path.join(dir,'background.js'),'utf8'),context);}
   reload();
-  return{state,calls,posts,scheduled,reload,setFail:v=>fail=v,setNetworkDown:v=>networkDown=v,setStatus:v=>status=v,setTaskMissing:v=>taskMissing=v,setTaskAllow:v=>taskAllow=v,tick:async(delta=30000)=>{now+=delta;await vm.runInContext('tick()',context);},complete:()=>listeners.updated(1,{status:'complete'}),command:(action,extra={})=>new Promise(resolve=>listeners.message({action,...extra},{},resolve))};
+  return{state,calls,posts,scheduled,reload,setFail:v=>fail=v,setNetworkDown:v=>networkDown=v,setStatus:v=>status=v,setTaskMissing:v=>taskMissing=v,setTaskAllow:v=>taskAllow=v,setRenderWait:v=>renderWait=v,tick:async(delta=30000)=>{now+=delta;await vm.runInContext('tick()',context);},complete:()=>listeners.updated(1,{status:'complete'}),command:(action,extra={})=>new Promise(resolve=>listeners.message({action,...extra},{},resolve))};
 }
 test('a completed page is read immediately while the next navigation keeps the site interval',async()=>{
   const h=harness();
@@ -46,6 +46,14 @@ test('a completed page is read immediately while the next navigation keeps the s
   await h.tick(9999);assert.equal(h.calls.length,1,'must not navigate before the ten-second floor');
   await h.tick(1);assert.equal(h.calls.length,2);
   assert.ok(h.scheduled.includes(500),'page-load polling should not wait for the 30-second fallback alarm');
+});
+test('a site-specific render wait prevents reading an SPA skeleton before cards appear',async()=>{
+  const h=harness();h.setRenderWait(4000);
+  await h.tick();await h.complete();
+  assert.equal(h.state.job.queue.length,2,'the search skeleton must not be parsed');
+  assert.ok(h.scheduled.includes(4000));
+  await h.tick(4000);
+  assert.equal(h.state.job.queue.length,3,'cards are parsed after the render grace period');
 });
 test('a temporary local-service outage retries without pausing or losing the cursor',async()=>{
   const h=harness();await h.tick();
