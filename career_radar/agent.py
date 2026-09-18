@@ -325,7 +325,8 @@ SKILL|证据ID逗号分隔|技能文字
 ENTRY|原经历entry_id|证据ID逗号分隔|改写后的经历要点
 目标是让招聘者在 10 秒内看到真实匹配点，默认一页，允许重新排序但不得改变事实归属。
 每条内容必须引用 candidate.evidence 的 evidence_ids。entries 只输出 entry_id 和 bullets；entry_id 必须来自
-resume_entries，且 bullets 只能引用该经历自己的 evidence_ids。不要输出公司、项目名、角色、日期或章节标题，后端会从原简历复制。
+resume_entries，且 bullets 只能引用该经历自己的 evidence_ids（先查看该 entry 的 evidence_ids 列表，逐条核对；不要引用其他 entry 的 ID）。
+一条 ENTRY 只能描述一个原项目/公司/经历；即使两个经历使用了相同技术，也不能合并成一条。不要输出公司、项目名、角色、日期或章节标题，后端会从原简历复制。
 每条经历优先采用“动作 + 任务或技术 + 结果”；没有结果证据时准确描述交付物，不得增加数字。
 不得空泛堆砌“熟悉、精通、负责”，不得重复事实、照抄 JD 或增加无证据技能。
 最多 2 行 SUMMARY、8 行 SKILL、10 个经历且每个经历最多 4 行 ENTRY。正文内不要使用竖线。不要输出 Markdown。
@@ -337,29 +338,42 @@ resume_entries，且 bullets 只能引用该经历自己的 evidence_ids。不�
                 system_prompt="你是 CareerRadar 定向简历改写 Agent，只能重组有证据的真实经历，严格返回行协议。",
                 timeout_seconds=300, max_tokens=TAILOR_WRITE_MAX_TOKENS, api_max_retries=1,
             )
-            raw: dict[str, Any] = {"headline": target.title, "summary": [], "skills": [], "entries": []}
-            entries: dict[str, dict[str, Any]] = {}
-            for line in output.text.splitlines():
-                parts = [item.strip() for item in line.split("|", 3)]
-                if len(parts) == 2 and parts[0] == "HEADLINE":
-                    raw["headline"] = parts[1]
-                elif len(parts) == 3 and parts[0] in {"SUMMARY", "SKILL"}:
-                    item = {"text": parts[2], "evidence_ids": [value.strip() for value in parts[1].split(",") if value.strip()]}
-                    destination = raw["summary" if parts[0] == "SUMMARY" else "skills"]
-                    limit = 2 if parts[0] == "SUMMARY" else 8
-                    if len(destination) < limit:
-                        destination.append(item)
-                elif len(parts) == 4 and parts[0] == "ENTRY":
-                    entry = entries.get(parts[1])
-                    if entry is None and len(entries) < 10:
-                        entry = entries.setdefault(parts[1], {"entry_id": parts[1], "bullets": []})
-                    if entry is not None and len(entry["bullets"]) < 4:
-                        entry["bullets"].append({
-                            "text": parts[3],
-                            "evidence_ids": [value.strip() for value in parts[2].split(",") if value.strip()],
-                        })
-            raw["entries"] = list(entries.values())
-            version = normalize_draft(ResumeDraftOutput.model_validate(raw))
+            try:
+                raw: dict[str, Any] = {"headline": target.title, "summary": [], "skills": [], "entries": []}
+                entries: dict[str, dict[str, Any]] = {}
+                for line in output.text.splitlines():
+                    parts = [item.strip() for item in line.split("|", 3)]
+                    if len(parts) == 2 and parts[0] == "HEADLINE":
+                        raw["headline"] = parts[1]
+                    elif len(parts) == 3 and parts[0] in {"SUMMARY", "SKILL"}:
+                        item = {"text": parts[2], "evidence_ids": [value.strip() for value in parts[1].split(",") if value.strip()]}
+                        destination = raw["summary" if parts[0] == "SUMMARY" else "skills"]
+                        limit = 2 if parts[0] == "SUMMARY" else 8
+                        if len(destination) < limit:
+                            destination.append(item)
+                    elif len(parts) == 4 and parts[0] == "ENTRY":
+                        entry = entries.get(parts[1])
+                        if entry is None and len(entries) < 10:
+                            entry = entries.setdefault(parts[1], {"entry_id": parts[1], "bullets": []})
+                        if entry is not None and len(entry["bullets"]) < 4:
+                            entry["bullets"].append({
+                                "text": parts[3],
+                                "evidence_ids": [value.strip() for value in parts[2].split(",") if value.strip()],
+                            })
+                raw["entries"] = list(entries.values())
+                version = normalize_draft(ResumeDraftOutput.model_validate(raw))
+            except Exception as exc:
+                # A malformed line or a cross-entry citation is a writer error,
+                # not a reason to expose a partial/fallback resume. Feed the
+                # concrete failure back into the next writer attempt so it can
+                # correct the evidence IDs while preserving the source entry.
+                feedback = [
+                    f"{exc}。每条 ENTRY 只能引用该 entry_id 在 resume_entries 中列出的 evidence_ids；"
+                    "不得把不同项目、公司或经历的证据放在同一条 ENTRY 中。"
+                ]
+                if attempt < 2:
+                    continue
+                raise
             if validator:
                 try:
                     validator(version)

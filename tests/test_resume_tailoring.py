@@ -466,6 +466,61 @@ def test_model_tailoring_preserves_cited_entries_and_runs_quality_review(tmp_pat
     asyncio.run(run())
 
 
+def test_model_cross_entry_citation_is_retried_without_merging_facts(tmp_path):
+    async def run():
+        app = create_app(settings(tmp_path))
+        app.state.database.initialize()
+        profile = build_profile(RESUME, "profile_cross_entry_retry")
+        contact = extract_candidate_contact(profile)
+        profile.confirmed = True
+        app.state.database.save_profile(profile)
+        app.state.database.save_contact(contact)
+        target = await _target_for_model_test(app, profile.profile_id)
+        tailoring = app.state.tailoring_service.create_tailoring(profile.profile_id, target.target_job_id)
+        if tailoring.questions:
+            tailoring = app.state.tailoring_service.save_answers(
+                tailoring.tailoring_id, {item.question_id: None for item in tailoring.questions},
+            )
+        public = _public_profile(profile, contact)
+        fallback = _fallback_draft(public, contact, target, tailoring, "draft_cross_entry_retry")
+        project_entry = next(item for item in public.resume_entries if item.kind == "project")
+        project_evidence = project_entry.evidence_ids[0]
+        project_quote = next(item.quote for item in public.evidence if item.block_id == project_evidence)
+        other_entry = next(item for item in public.resume_entries if item.entry_id != project_entry.entry_id)
+        other_evidence = other_entry.evidence_ids[0]
+        writer_calls = 0
+
+        async def fake_run(_prompt, _task_id, output_type, **_kwargs):
+            nonlocal writer_calls
+            from career_radar.agent import ResumePlanOutput, ResumeQualityReviewTextOutput, ResumeWritingOutput
+            if output_type is ResumePlanOutput:
+                return ResumePlanOutput.model_validate({
+                    "requirements": [], "selected_entry_ids": [project_entry.entry_id],
+                    "strategy": "只突出股票数据采集项目",
+                }), [], "langgraph"
+            if output_type is ResumeQualityReviewTextOutput:
+                return ResumeQualityReviewTextOutput(text="SCORES|90|90|90|90\nPASS|true"), [], "langgraph"
+            writer_calls += 1
+            cited = f"{project_evidence},{other_evidence}" if writer_calls == 1 else project_evidence
+            return ResumeWritingOutput(text="\n".join([
+                f"HEADLINE|{target.title}",
+                f"SUMMARY|{project_evidence}|{project_quote}",
+                f"ENTRY|{project_entry.entry_id}|{cited}|{project_quote}",
+            ])), [], "langgraph"
+
+        app.state.agent._run_structured = fake_run
+        version = await app.state.agent.tailor_resume(
+            public, target, tailoring, contact, fallback,
+            validator=lambda draft: validate_draft(draft, profile),
+        )
+        assert writer_calls == 2
+        entry = version.sections[0].entries[0]
+        assert entry.entry_id == project_entry.entry_id
+        assert entry.bullets[0].evidence_ids == [project_evidence]
+
+    asyncio.run(run())
+
+
 def test_failed_model_fact_is_saved_as_failed_validation_version(tmp_path):
     async def run():
         app = create_app(settings(tmp_path, api_key="configured"))
