@@ -99,7 +99,7 @@ TOKEN_PLAN_API_KEY=
 
 ## 代码边界
 
-- `career_radar/resume.py`：格式校验、文本提取、稳定证据块。
+- `career_radar/resume.py`：格式校验、文本提取、稳定证据块；项目地址、仓库链接等 URL 会保留为项目证据，不会被联系方式中的“地址”规则截断或误识别为新项目标题。
 - `career_radar/sites/`：招聘站点适配器。`base.py` 定义 `SiteAdapter` 协议与统一的快照构造，`boss.py`／`zhaopin.py`／`job51.py` 各自负责一个站点，`transport.py` 是站点无关的 HTTP + 浏览器降级与调度，`registry.py` 是注册表。新增站点只需写一个适配器文件并登记。
 - `browser-extension/`：持久化任务队列、专用标签页导航、暂停恢复和自动回传。
 - `career_radar/scoring.py`：40/25/15/5/15 固定权重评分。

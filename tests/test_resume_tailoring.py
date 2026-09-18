@@ -9,7 +9,9 @@ from docx import Document
 
 from career_radar.config import Settings
 from career_radar.resume import ResumeError, build_profile, extract_candidate_contact, skill_is_grounded
-from career_radar.schemas import Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion, TailoringQuestion
+from career_radar.schemas import (
+    Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion, ResumeSourceEntry, TailoringQuestion,
+)
 from career_radar.sites import FetchResult
 from career_radar.tailoring import (
     _fallback_draft, _public_profile, _questions, target_from_pasted, validate_draft,
@@ -345,6 +347,49 @@ def test_resume_parser_keeps_projects_as_separate_evidence_units():
     assert projects[0].heading.startswith("校园招聘分析平台")
     assert projects[1].heading.startswith("课程管理系统")
     assert set(projects[0].evidence_ids).isdisjoint(projects[1].evidence_ids)
+
+
+def test_project_repository_line_stays_with_project_evidence():
+    profile = build_profile("""李同学
+项目经历
+股票数据项目
+项目地址：https://gitee.com/wk132/data-agent.git
+使用 Python 完成数据处理和结果保存
+教育经历
+计算机科学 本科
+""", "profile_project_repository_line")
+    projects = [item for item in profile.resume_entries if item.kind == "project"]
+    assert len(projects) == 1
+    assert projects[0].heading == "股票数据项目"
+    quotes = {item.block_id: item.quote for item in profile.evidence}
+    assert any("gitee.com/wk132/data-agent.git" in quotes[item] for item in projects[0].evidence_ids)
+
+
+def test_public_profile_repairs_historical_project_link_entry(tmp_path):
+    profile = build_profile(
+        "李同学\n项目经历\n股票数据项目\n使用 Python 完成数据处理和结果保存\n教育经历\n计算机科学 本科",
+        "profile_historical_project_link",
+    )
+    link_quote = "项目地址：https://gitee.com/wk132/data-agent.git"
+    link_id = "resume-project-link-old"
+    profile.evidence.append(Evidence(
+        source_type="resume", source_id=profile.profile_id, block_id=link_id,
+        quote=link_quote, section="项目", provenance="uploaded_resume",
+    ))
+    link_entry = ResumeSourceEntry(
+        entry_id="source-entry-old-project-link", kind="project", heading=link_quote,
+        evidence_ids=[link_id], original_bullets=[link_quote],
+    )
+    project_index = next(
+        index for index, item in enumerate(profile.resume_entries) if item.kind == "project"
+    )
+    profile.resume_entries.insert(project_index + 1, link_entry)
+    public = _public_profile(profile, extract_candidate_contact(profile))
+    projects = [item for item in public.resume_entries if item.kind == "project"]
+    assert len(projects) == 1
+    assert projects[0].heading == "股票数据项目"
+    quotes = {item.block_id: item.quote for item in public.evidence}
+    assert any("gitee.com/wk132/data-agent.git" in quotes[item] for item in projects[0].evidence_ids)
 
 
 def test_tailoring_evaluation_set_contains_ten_anonymized_graduate_cases():

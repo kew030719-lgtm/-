@@ -132,11 +132,21 @@ DATE_RANGE_RE = re.compile(
     r"(?:19|20)\d{2}(?:[./年-]\d{1,2}月?)?\s*(?:[-—至~～]|到)\s*"
     r"(?:(?:19|20)\d{2}(?:[./年-]\d{1,2}月?)?|至今|现在)"
 )
+PROJECT_LINK_LABEL_RE = re.compile(
+    r"(?:项目地址|项目链接|仓库地址|代码仓库|源码地址|仓库链接)\s*[:：]",
+    re.I,
+)
+URL_RE = re.compile(r"https?://|www\.", re.I)
 
 
 def _looks_entry_heading(text: str, section: str) -> bool:
     value = text.strip(" ：:")
     if value.lower() in SECTION_LABELS or len(value) > 80:
+        return False
+    # A repository/project URL is supporting evidence for the previous
+    # project, not a new project title. This also handles old resume formats
+    # that put the link on its own line.
+    if URL_RE.search(value) or PROJECT_LINK_LABEL_RE.search(value):
         return False
     if DATE_RANGE_RE.search(value):
         return True
@@ -228,7 +238,10 @@ def extract_candidate_contact(profile: CandidateProfile) -> CandidateContact:
             contact.phone = phone.group(0)
         if email and not contact.email:
             contact.email = email.group(0)
-        location = re.search(r"(?:现居|所在地|地址|城市)\s*[:：]?\s*([^|｜，,；;]{2,20})", quote)
+        is_project_link = bool(URL_RE.search(quote) and PROJECT_LINK_LABEL_RE.search(quote))
+        location = None if is_project_link else re.search(
+            r"(?:现居|所在地|地址|城市)\s*[:：]?\s*([^|｜，,；;]{2,20})", quote,
+        )
         if not contact.location and location:
             contact.location = location.group(1).strip()
         normalized_name = quote.strip(" ：:").lower()
@@ -246,7 +259,8 @@ def extract_candidate_contact(profile: CandidateProfile) -> CandidateContact:
         sanitized = EMAIL_RE.sub("", PHONE_RE.sub("", quote))
         if location:
             sanitized = sanitized.replace(location.group(0), "")
-        sanitized = re.sub(r"(?:电话|手机|邮箱|电子邮箱|现居|所在地|地址|城市)\s*[:：]?", "", sanitized)
+        if not is_project_link:
+            sanitized = re.sub(r"(?:电话|手机|邮箱|电子邮箱|现居|所在地|地址|城市)\s*[:：]?", "", sanitized)
         sanitized = re.sub(r"\s*[|｜·]\s*[|｜·]*\s*", " | ", sanitized).strip(" |｜·，,；;")
         if sanitized:
             stable = hashlib.sha256(f"{item.section}\0{sanitized}".encode()).hexdigest()[:12]

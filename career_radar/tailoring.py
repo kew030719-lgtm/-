@@ -224,6 +224,23 @@ def _public_profile(profile: CandidateProfile, contact: CandidateContact) -> Can
         entry.evidence_ids = [item for item in entry.evidence_ids if item in safe]
         entry.original_bullets = [safe[item] for item in entry.evidence_ids]
         if entry.evidence_ids:
+            is_project_link = (
+                entry.kind == "project"
+                and (
+                    re.search(r"https?://|www\.", entry.heading, re.I)
+                    or re.search(r"(?:项目地址|项目链接|仓库地址|代码仓库|源码地址|仓库链接)\s*[:：]",
+                                 entry.heading, re.I)
+                )
+            )
+            if is_project_link and entries and entries[-1].kind == "project":
+                previous = entries[-1]
+                previous.evidence_ids.extend(
+                    item for item in entry.evidence_ids if item not in previous.evidence_ids
+                )
+                previous.original_bullets.extend(
+                    item for item in entry.original_bullets if item not in previous.original_bullets
+                )
+                continue
             entries.append(entry)
     value.resume_entries = entries
     return value
