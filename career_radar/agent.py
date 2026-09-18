@@ -384,14 +384,30 @@ resume_entries，且 bullets 只能引用该经历自己的 evidence_ids（先�
                     if attempt < 2:
                         continue
                     raise
+            cited_ids = {
+                evidence_id
+                for bullet in [
+                    *version.summary, *version.skills,
+                    *(bullet for section in version.sections for bullet in section.bullets),
+                    *(bullet for section in version.sections
+                      for entry in section.entries for bullet in entry.bullets),
+                ]
+                for evidence_id in bullet.evidence_ids
+            }
             review_prompt = """评审这份定向简历，不得创造或改写候选人事实。将结果写入 text 字段，每行严格使用：
 SCORES|岗位相关性0-100|具体性0-100|结构0-100|简洁度0-100
 PASS|true或false
 ISSUE|具体问题
 REVISION|可执行的改写要求
-只有四项均不低于 70、没有跨经历混写、没有无证据事实、适合一页阅读时才能 PASS|true。不要输出 Markdown。\n输入：\n""" + json.dumps({
+UNSUPPORTED|bullet_id|证据无法支持的能力或技术表述
+只有四项均不低于 70、没有跨经历混写、没有 UNSUPPORTED、没有无证据事实、适合一页阅读时才能 PASS|true。
+技能和能力允许自然改写，不要求逐字匹配；必须对照 candidate_evidence 判断语义是否确实由对应 evidence_ids 支持。
+不要因为措辞不同就判定失败，也不能仅凭岗位要求推断候选人拥有该能力。不要输出 Markdown。\n输入：\n""" + json.dumps({
                 "target_job": context["target_job"], "plan": context["plan"],
                 "draft": version.model_dump(exclude={"contact"}),
+                "candidate_evidence": [
+                    item.model_dump() for item in profile.evidence if item.block_id in cited_ids
+                ],
             }, ensure_ascii=False)
             review, _tools, _source = await self._run_structured(
                 review_prompt, f"tailor-review-{tailoring.tailoring_id}-{attempt + 1}",
@@ -400,6 +416,7 @@ REVISION|可执行的改写要求
                 timeout_seconds=180, max_tokens=TAILOR_REVIEW_MAX_TOKENS, api_max_retries=1,
             )
             parsed_review = ResumeQualityReviewOutput()
+            has_unsupported = False
             for line in review.text.splitlines():
                 parts = [item.strip() for item in line.split("|")]
                 if len(parts) == 5 and parts[0] == "SCORES":
@@ -415,6 +432,11 @@ REVISION|可执行的改写要求
                     parsed_review.issues.append(parts[1])
                 elif len(parts) == 2 and parts[0] == "REVISION":
                     parsed_review.revision_instructions.append(parts[1])
+                elif len(parts) >= 3 and parts[0] == "UNSUPPORTED":
+                    parsed_review.issues.append("证据无法支持：" + "|".join(parts[1:]))
+                    has_unsupported = True
+            if has_unsupported:
+                parsed_review.passed = False
             version.quality_report.relevance_score = parsed_review.relevance_score
             version.quality_report.specificity_score = parsed_review.specificity_score
             version.quality_report.structure_score = parsed_review.structure_score

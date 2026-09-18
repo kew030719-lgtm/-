@@ -229,7 +229,8 @@ def _public_profile(profile: CandidateProfile, contact: CandidateContact) -> Can
     return value
 
 
-def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile) -> None:
+def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile, *,
+                   check_skills: bool = True) -> None:
     sources = {item.block_id: item for item in profile.evidence}
 
     def validate_text(text: str, evidence_ids: list[str], label: str) -> None:
@@ -242,9 +243,10 @@ def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile) -> No
         for entity in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{2,30}(?:有限责任公司|有限公司|大学|学院|研究院)", text):
             if entity not in quotes:
                 raise ResumeError(f"简历内容出现未经证实的机构：{entity}")
-        for token, display in SKILLS.items():
-            if token in text.lower() and not skill_is_grounded(token, quotes):
-                raise ResumeError(f"简历内容出现未经证实的技能：{display}")
+        if check_skills:
+            for token, display in SKILLS.items():
+                if token in text.lower() and not skill_is_grounded(token, quotes):
+                    raise ResumeError(f"简历内容出现未经证实的技能：{display}")
 
     for bullet in _all_bullets(version):
         validate_text(bullet.text, bullet.evidence_ids, bullet.bullet_id)
@@ -421,7 +423,10 @@ class TailoringService:
         try:
             version = await self.agent.tailor_resume(
                 public_profile, target, tailoring, contact, version,
-                validator=lambda draft: validate_draft(draft, profile),
+                # Skill wording is checked semantically by the typed quality
+                # reviewer against the cited evidence below. Hard facts and
+                # evidence ownership remain deterministic here.
+                validator=lambda draft: validate_draft(draft, profile, check_skills=False),
             )
         except Exception as exc:
             tailoring.status = "FAILED"
@@ -430,7 +435,7 @@ class TailoringService:
             self.database.save_tailoring(tailoring)
             raise ResumeGenerationError(tailoring.error) from exc
         try:
-            validate_draft(version, profile)
+            validate_draft(version, profile, check_skills=False)
             assess_draft_quality(version, target)
         except ResumeError as exc:
             version.validation_status = "FAILED_VALIDATION"

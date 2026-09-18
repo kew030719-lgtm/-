@@ -542,6 +542,66 @@ def test_model_cross_entry_citation_is_retried_without_merging_facts(tmp_path):
     asyncio.run(run())
 
 
+def test_semantic_quality_review_can_reject_an_unsupported_skill_claim(tmp_path):
+    async def run():
+        app = create_app(settings(tmp_path))
+        app.state.database.initialize()
+        profile = build_profile(
+            "张三\n项目经历\n股票处理项目\n我做过股票信息处理脚本，整理过接口返回的数据并保存结果。\n教育经历\n计算机科学本科。",
+            "profile_semantic_skill_review",
+        )
+        contact = extract_candidate_contact(profile)
+        profile.confirmed = True
+        app.state.database.save_profile(profile)
+        app.state.database.save_contact(contact)
+        target = await _target_for_model_test(app, profile.profile_id)
+        tailoring = app.state.tailoring_service.create_tailoring(profile.profile_id, target.target_job_id)
+        if tailoring.questions:
+            tailoring = app.state.tailoring_service.save_answers(
+                tailoring.tailoring_id, {item.question_id: None for item in tailoring.questions},
+            )
+        public = _public_profile(profile, contact)
+        fallback = _fallback_draft(public, contact, target, tailoring, "draft_semantic_skill_review")
+        source_entry = next(item for item in public.resume_entries if item.kind == "project")
+        source_evidence = source_entry.evidence_ids[0]
+        writer_calls = 0
+        review_calls = 0
+
+        async def fake_run(_prompt, _task_id, output_type, **_kwargs):
+            nonlocal writer_calls, review_calls
+            from career_radar.agent import ResumePlanOutput, ResumeQualityReviewTextOutput, ResumeWritingOutput
+            if output_type is ResumePlanOutput:
+                return ResumePlanOutput.model_validate({
+                    "requirements": [], "selected_entry_ids": [source_entry.entry_id],
+                    "strategy": "保留原项目表述",
+                }), [], "langgraph"
+            if output_type is ResumeQualityReviewTextOutput:
+                review_calls += 1
+                if review_calls == 1:
+                    return ResumeQualityReviewTextOutput(
+                        text="UNSUPPORTED|bullet|数据采集无法由候选人证据支持\nPASS|true",
+                    ), [], "langgraph"
+                return ResumeQualityReviewTextOutput(
+                    text="SCORES|90|90|90|90\nPASS|true",
+                ), [], "langgraph"
+            writer_calls += 1
+            return ResumeWritingOutput(text="\n".join([
+                f"HEADLINE|{target.title}",
+                f"SUMMARY|{source_evidence}|负责数据采集",
+                f"ENTRY|{source_entry.entry_id}|{source_evidence}|负责数据采集",
+            ])), [], "langgraph"
+
+        app.state.agent._run_structured = fake_run
+        version = await app.state.agent.tailor_resume(
+            public, target, tailoring, contact, fallback,
+            validator=lambda draft: validate_draft(draft, profile, check_skills=False),
+        )
+        assert version.quality_report.passed is True
+        assert writer_calls == 2 and review_calls == 2
+
+    asyncio.run(run())
+
+
 def test_failed_model_fact_is_saved_as_failed_validation_version(tmp_path):
     async def run():
         app = create_app(settings(tmp_path, api_key="configured"))
