@@ -35,7 +35,7 @@ def _overall(checks: list[ResumeQualityCheck]) -> str:
 
 def _version_text(version: ResumeDraftVersion) -> str:
     values = [version.headline, version.contact.name, version.contact.phone,
-              version.contact.email, version.contact.location]
+              version.contact.email, version.contact.location, *version.contact.personal_facts]
     values.extend(item.text for item in [*version.summary, *version.skills])
     for section in version.sections:
         values.append(section.title)

@@ -47,6 +47,17 @@ def _display_bullet_text(text: str, links: list[str] | None = None) -> str:
     return value.strip(" ，,；;")
 
 
+def _personal_facts(profile: CandidateProfile) -> list[str]:
+    """Return exact non-contact personal facts from the uploaded resume."""
+    labels = ("性别", "民族", "年龄", "政治面貌", "身高", "体重")
+    facts: list[str] = []
+    for item in profile.evidence:
+        value = item.quote.strip()
+        if value.startswith(labels) and value not in facts:
+            facts.append(value)
+    return facts
+
+
 def supplement_entry_metadata(answer: str) -> tuple[str, str]:
     """Classify a confirmed answer without inventing a project identity.
 
@@ -920,6 +931,9 @@ class TailoringService:
         if contacts:
             p = info_cell.add_paragraph(contacts)
             p.paragraph_format.space_after = Pt(2)
+        if version.contact.personal_facts:
+            p = info_cell.add_paragraph("  ·  ".join(version.contact.personal_facts))
+            p.paragraph_format.space_after = Pt(2)
         target_paragraph = document.add_paragraph(f"目标岗位：{target.company} · {target.title}")
         target_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         target_paragraph.paragraph_format.space_after = Pt(2)
@@ -1004,6 +1018,10 @@ class TailoringService:
             return f"<section><h2>{html.escape(title)}</h2>{body}</section>" if body else ""
 
         contact = " · ".join(filter(None, [version.contact.phone, version.contact.email, version.contact.location]))
+        personal_facts = " · ".join(version.contact.personal_facts)
+        personal_facts_markup = (
+            f"<p class='contact'>{html.escape(personal_facts)}</p>" if personal_facts else ""
+        )
         priorities = {"教育经历": 0, "项目经历": 1, "工作经历": 2, "其他信息": 3, "补充技能": 4}
         content: list[str] = []
         if version.summary:
@@ -1026,7 +1044,7 @@ class TailoringService:
             photo_markup = f"<img class='photo photo-image' src='data:image/png;base64,{encoded}' alt='个人照片'>"
         return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
         @page{{size:210mm 453mm;margin:0}}*{{box-sizing:border-box}}body{{font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;color:#333;font-size:11pt;line-height:1.55;margin:0;padding:13mm 16mm 10mm;background:#fff}}header{{display:grid;grid-template-columns:36mm 1fr;column-gap:10mm;align-items:center;padding-bottom:7mm;border-bottom:1px solid #e4e4e4}}.photo{{width:31mm;height:31mm;border:2px solid #f29a5c;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#f29a5c;font-size:24pt;font-weight:700;background:#fff7f0;object-fit:cover}}.photo-image{{padding:0;background:#fff}}h1{{font-size:25pt;margin:0 0 2mm;color:#111;font-weight:800}}.contact{{font-size:10.5pt;color:#555;margin:1mm 0}}.target{{color:#f08b4b;font-weight:700;font-size:11.5pt;margin:2mm 0 0}}section{{padding:5mm 0 4mm;border-bottom:1px solid #e5e5e5;break-inside:avoid}}h2{{font-size:15pt;color:#222;margin:0 0 2.5mm;font-weight:800}}h2::after{{content:'';display:block;width:23mm;height:1.2mm;background:#f29a5c;margin-top:1.5mm}}ul{{margin:0;padding-left:6mm}}li{{margin:0 0 1.2mm;break-inside:avoid}}.entry{{margin:2mm 0 3mm;break-inside:avoid}}.entry-head{{display:flex;justify-content:space-between;gap:5mm;font-size:12pt;margin-bottom:1mm}}.entry-head span{{color:#666;font-size:10.5pt;white-space:nowrap}}.project-link{{margin:0 0 1mm;color:#666;font-size:10.5pt}}.skills{{margin:0;line-height:1.7}}section:last-child{{border-bottom:0}}
-        </style></head><body><header>{photo_markup}<div><h1>{html.escape(version.contact.name or '个人简历')}</h1><p class='contact'>{html.escape(contact)}</p><p class='target'>目标岗位：{html.escape(target.company)} · {html.escape(target.title)}</p></div></header>{body}</body></html>"""
+        </style></head><body><header>{photo_markup}<div><h1>{html.escape(version.contact.name or '个人简历')}</h1><p class='contact'>{html.escape(contact)}</p>{personal_facts_markup}<p class='target'>目标岗位：{html.escape(target.company)} · {html.escape(target.title)}</p></div></header>{body}</body></html>"""
 
     async def render_pdf(self, html_value: str, output: Path) -> None:
         from playwright.async_api import async_playwright
@@ -1050,6 +1068,7 @@ class TailoringService:
         if not profile:
             raise ResumeError("候选人画像不存在")
         version.contact = sanitize_candidate_contact(version.contact)
+        version.contact.personal_facts = _personal_facts(profile)
         self.database.save_contact(version.contact)
         if _repair_draft_source_metadata(version, profile):
             # Persist the repaired metadata so the preview, subsequent exports

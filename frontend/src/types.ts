@@ -278,6 +278,7 @@ export interface CandidateContact {
   phone: string
   email: string
   location: string
+  personal_facts?: string[]
   photo_path?: string
 }
 

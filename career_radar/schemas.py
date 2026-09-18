@@ -237,6 +237,7 @@ class CandidateContact(BaseModel):
     phone: str = ""
     email: str = ""
     location: str = ""
+    personal_facts: list[str] = Field(default_factory=list)
     # Optional local asset extracted from an uploaded visual resume. It never
     # enters model prompts and is only used to preserve the source template's
     # portrait during local export.
