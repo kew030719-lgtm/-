@@ -182,7 +182,10 @@ def test_benefits_never_create_tailoring_questions(tmp_path):
         profile.profile_id, "星图科技", "AI 产品经理",
         "负责 AI Agent 产品评测体系建设，要求能够分析失败案例并推动产品持续改进。",
     )
-    target.required_skills = ["交通补助", "节日福利", "免费班车", "团建聚餐", "零食下午茶"]
+    target.required_skills = [
+        "交通补助", "节日福利", "免费班车", "团建聚餐", "零食下午茶",
+        "法定节假日三薪", "节假日加班费", "企业年金", "保底工资", "意外险",
+    ]
     target.responsibilities = ["负责 AI Agent 产品评测体系建设，能够分析失败案例并推动改进。"]
 
     questions, missing = _questions(profile, target, [])

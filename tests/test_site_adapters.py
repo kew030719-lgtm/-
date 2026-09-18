@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from career_radar.sites import Transport, build_snapshot, parse_salary
+from career_radar.sites.base import is_benefit_label
 from career_radar.sites.job51 import Job51Adapter
 from career_radar.sites.zhaopin import ZhaopinAdapter
 
@@ -35,6 +36,19 @@ def test_snapshot_separates_benefit_tags_from_required_skills():
 
     assert job.required_skills == ["Python"]
     assert job.benefits == ["交通补助", "节日福利", "免费班车", "团建聚餐", "零食下午茶"]
+
+
+@pytest.mark.parametrize("benefit", [
+    "法定节假日三薪", "节假日加班费", "企业年金", "保底工资", "意外险",
+    "五险一金", "带薪年假", "14薪", "员工宿舍", "周末双休",
+])
+def test_compensation_and_perk_categories_are_not_skills(benefit):
+    assert is_benefit_label(benefit)
+
+
+@pytest.mark.parametrize("skill", ["Python", "Java", "数据分析", "沟通能力", "风险管理"])
+def test_real_skill_tags_are_not_misclassified_as_benefits(skill):
+    assert not is_benefit_label(skill)
 
 
 # ------------------------------------------------------------------- 智联

@@ -115,7 +115,17 @@ BENEFIT_LABELS = (
     "五险一金", "补充医疗", "定期体检", "带薪年假", "年终奖", "绩效奖金", "股票期权",
     "交通补助", "交通补贴", "通讯补助", "通讯补贴", "餐饮补助", "餐补", "房补", "住房补贴",
     "加班补助", "节日福利", "生日福利", "员工福利", "免费班车", "员工旅游", "团建聚餐",
-    "零食下午茶", "包吃", "包住", "周末双休", "弹性工作",
+    "零食下午茶", "包吃", "包住", "周末双休", "弹性工作", "工作餐", "员工宿舍",
+    "法定节假日三薪", "节假日加班费", "企业年金", "保底工资", "意外险",
+)
+
+BENEFIT_PATTERNS = (
+    re.compile(r"(?:工资|薪资|薪酬|三薪|加班费|年金|奖金|补助|补贴|津贴)$"),
+    re.compile(r"(?:五险(?:一金)?|保险|意外险|医疗险|公积金|一金)$"),
+    re.compile(r"(?:年假|婚假|产假|陪产假|病假|调休|法定节假日)$"),
+    re.compile(r"(?:班车|工作餐|下午茶|零食|聚餐|团建|旅游|体检|宿舍)$"),
+    re.compile(r"(?:包吃|包住|双休|大小周|弹性工作|晋升空间|员工培训|购房优惠|落户)$"),
+    re.compile(r"\d+薪$"),
 )
 
 
@@ -123,7 +133,8 @@ def is_benefit_label(value: str) -> bool:
     normalized = re.sub(r"\s+", "", value).lower()
     return bool(normalized) and (
         any(label.lower() in normalized for label in BENEFIT_LABELS)
-        or normalized.endswith(("补助", "补贴", "福利", "奖金"))
+        or normalized.endswith("福利")
+        or any(pattern.search(normalized) for pattern in BENEFIT_PATTERNS)
     )
 
 

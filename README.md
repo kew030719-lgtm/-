@@ -171,7 +171,7 @@ npm run build                # 输出到 career_radar/static/app/，随后访问
 
 事实追问不只依赖采集器识别出的 `required_skills`。当该字段为空或不足 5 项时，后端会从 JD 的职责、经验年限、评测和协作要求中补充最多 5 个高影响问题；旧的空问题失败任务在重新打开时也会补建问题。确实没有缺口时，界面会明确提供“直接生成定向简历”，而不是显示没有输入框的空白追问区。
 
-职位标签会在通用快照组装层区分技能与福利；交通补助、节日福利、免费班车、团建聚餐、零食下午茶等内容进入 `benefits`，不得进入 `required_skills`。定向简历层还会再次过滤历史快照中的福利污染，并在旧任务重新打开时替换已经生成的错误福利追问。
+职位标签会在通用快照组装层区分技能与福利。工资薪酬、奖金补贴、保险年金、休假、班车餐食、团建体检、住宿双休等类别统一进入 `benefits`，不得进入 `required_skills`；定向简历层还会再次过滤历史快照中的福利污染，并在旧任务重新打开时替换已经生成的错误福利追问。
 
 真实任务可通过 `PYTHONPATH=.deps:. python3 scripts/audit_live_run.py task_…` 只读检查：采集数量、去重结果、字段存在情况、快照证据一致性，以及报告实际使用 LangGraph 还是备用逻辑。`scripts/generate_evaluation_report.py` 会根据 SQLite 和仓库外的脱敏评测清单生成 JSON/Markdown 发布门槛报告；格式和使用方法见 [evaluation/README.md](evaluation/README.md)。字段存在不等于语义准确，仍需抽查原始岗位。
 
