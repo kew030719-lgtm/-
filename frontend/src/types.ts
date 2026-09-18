@@ -253,7 +253,16 @@ export interface ResumeQualityReport {
   estimated_pages: number
   issues: string[]
   uncovered_requirements: string[]
+  checks: ResumeQualityCheck[]
+  status: 'PASS' | 'WARN' | 'FAIL'
   passed: boolean
+}
+
+export interface ResumeQualityCheck {
+  id: string
+  status: 'PASS' | 'WARN' | 'FAIL'
+  message: string
+  suggestion: string
 }
 
 export interface ResumeSection {
@@ -297,7 +306,16 @@ export interface ResumeDraftBundle {
 export interface ResumeExport {
   export_id: string
   template: 'technical' | 'business'
-  status: string
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  docx_path?: string
+  pdf_path?: string
+  error?: string | null
+  qa_report?: {
+    status: 'PASS' | 'WARN' | 'FAIL'
+    checks: ResumeQualityCheck[]
+    page_count: number
+    ats_extractable: boolean
+  }
 }
 
 export interface SiteOption {

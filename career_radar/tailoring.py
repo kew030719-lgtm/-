@@ -20,15 +20,46 @@ from .resume import (
     sanitize_candidate_contact,
     skill_is_grounded,
 )
+from .resume_qa import inspect_export
 from .schemas import (
     CandidateContact, CandidateProfile, Evidence, JobSnapshot, ResumeBullet,
     ResumeDraftVersion, ResumeEntry, ResumeExport, ResumeSection, ResumeSourceEntry, ResumeTailoring,
-    SupplementalEvidence, TailoringQuestion, TargetJob,
+    ResumeQualityCheck, SupplementalEvidence, TailoringQuestion, TargetJob,
 )
 from .sites.base import is_benefit_label
 
 
-SYNTHETIC_ENTRY_HEADINGS = {"用户确认的补充经历"}
+SYNTHETIC_ENTRY_HEADINGS = {"用户确认的补充经历", "用户补充项目经历"}
+
+
+def supplement_entry_metadata(answer: str) -> tuple[str, str]:
+    """Classify a confirmed answer without inventing a project identity.
+
+    A repository/program description is a project experience, but the title
+    must be a phrase copied from the user's answer. If no safe phrase can be
+    extracted, keep a synthetic title and let the evidence remain the source
+    of truth.
+    """
+    text = re.sub(r"\s+", " ", answer).strip()
+    project_signal = re.search(
+        r"(?:项目|仓库|代码|程序|系统|平台|爬虫|开发|实现|编写|搭建|构建)", text,
+    )
+    if not project_signal:
+        return "other", "补充经历"
+    heading_match = re.search(
+        r"(?:编写|开发|实现|完成|搭建|构建)\s*([^，。；;\n]{2,40}"
+        r"(?:项目|程序|系统|平台|爬虫))",
+        text,
+    )
+    if not heading_match:
+        heading_match = re.search(
+            r"(?:写过|做过|负责)\s*([^，。；;\n]{2,40}(?:项目|程序|系统|平台|爬虫))",
+            text,
+        )
+    if not heading_match:
+        heading_match = re.search(r"([^，。；;\n]{2,30}(?:项目|程序|系统|平台|爬虫))", text)
+    heading = heading_match.group(1).strip() if heading_match else "补充项目经历"
+    return "project", heading
 
 
 def _stable_id(prefix: str, value: str) -> str:
@@ -227,6 +258,10 @@ def _public_profile(profile: CandidateProfile, contact: CandidateContact) -> Can
         entry.evidence_ids = [item for item in entry.evidence_ids if item in safe]
         entry.original_bullets = [safe[item] for item in entry.evidence_ids]
         if entry.evidence_ids:
+            if entry.kind == "other" and entry.heading in SYNTHETIC_ENTRY_HEADINGS:
+                entry.kind, entry.heading = supplement_entry_metadata(
+                    " ".join(entry.original_bullets),
+                )
             is_project_link = (
                 entry.kind == "project"
                 and (
@@ -278,7 +313,7 @@ def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile, *,
                           entry.evidence_ids, entry.entry_id)
             entry_quotes = " ".join(sources[item].quote for item in entry.evidence_ids)
             for metadata in (entry.heading, entry.subheading, entry.date_range):
-                if metadata and metadata not in SYNTHETIC_ENTRY_HEADINGS and metadata not in entry_quotes:
+                if metadata and metadata not in SYNTHETIC_ENTRY_HEADINGS and metadata not in {"补充经历", "补充项目经历"} and metadata not in entry_quotes:
                     raise ResumeError(f"简历条目出现未经证实的标题或日期：{metadata}")
             allowed = set(entry.evidence_ids)
             if any(not set(bullet.evidence_ids).issubset(allowed) for bullet in entry.bullets):
@@ -293,10 +328,75 @@ def assess_draft_quality(version: ResumeDraftVersion, target: TargetJob) -> None
     characters = len(text) + sum(len(entry.heading + entry.subheading + entry.date_range)
                                  for section in version.sections for entry in section.entries)
     report = version.quality_report
+    model_passed = report.passed
     report.evidence_coverage = 100 if bullets and all(item.evidence_ids for item in bullets) else 0
     report.duplicate_count = duplicates
     report.estimated_pages = round(max(0.5, characters / 1600), 1)
     report.uncovered_requirements = [skill for skill in target.required_skills if skill.lower() not in text.lower()]
+    checks: list[ResumeQualityCheck] = []
+    checks.append(ResumeQualityCheck(
+        id="fact_accuracy", status="PASS",
+        message="数字、机构、日期和经历归属已通过后端证据校验",
+    ))
+    checks.append(ResumeQualityCheck(
+        id="contact_consistency", status="PASS",
+        message="联系方式由本地联系人字段合并，不作为模型事实生成",
+    ))
+    template_phrases = ("温馨提示", "简历模板", "虚构示例", "请根据实际情况", "仅供参考")
+    has_template_text = any(phrase in text for phrase in template_phrases)
+    checks.append(ResumeQualityCheck(
+        id="no_template_text", status="FAIL" if has_template_text else "PASS",
+        message="简历包含模板提示语" if has_template_text else "未发现模板提示语或模型内部文字",
+        suggestion="删除模板提示语后重新生成" if has_template_text else "",
+    ))
+    checks.append(ResumeQualityCheck(
+        id="evidence_coverage", status="PASS" if report.evidence_coverage == 100 else "FAIL",
+        message="所有简历内容均有证据引用" if report.evidence_coverage == 100 else "存在没有证据引用的简历内容",
+        suggestion="补充证据后重新生成" if report.evidence_coverage != 100 else "",
+    ))
+    checks.append(ResumeQualityCheck(
+        id="duplicate_content", status="FAIL" if duplicates else "PASS",
+        message=f"存在 {duplicates} 条重复内容" if duplicates else "没有发现重复要点",
+        suggestion="合并重复要点并保留更具体的一条" if duplicates else "",
+    ))
+    too_many = [entry.heading for section in version.sections for entry in section.entries if len(entry.bullets) > 4]
+    checks.append(ResumeQualityCheck(
+        id="entry_bullet_limit", status="FAIL" if too_many else "PASS",
+        message="以下经历超过 4 个要点：" + "、".join(too_many[:5]) if too_many else "每条经历不超过 4 个要点",
+        suggestion="精简每条经历的要点" if too_many else "",
+    ))
+    placeholders = [entry.heading for section in version.sections for entry in section.entries
+                    if entry.heading in SYNTHETIC_ENTRY_HEADINGS]
+    checks.append(ResumeQualityCheck(
+        id="no_internal_placeholders", status="FAIL" if placeholders else "PASS",
+        message="存在内部占位标题：" + "、".join(placeholders[:5]) if placeholders else "未发现内部占位标题",
+        suggestion="把补充事实归入真实项目或经历标题后重新生成" if placeholders else "",
+    ))
+    if report.estimated_pages > 2:
+        page_status, page_message = "FAIL", "内容预计超过两页上限"
+    elif report.estimated_pages > 1.2:
+        page_status, page_message = "WARN", "内容超过一页优先篇幅，但仍在两页上限内"
+    else:
+        page_status, page_message = "PASS", "内容符合一页优先策略"
+    checks.append(ResumeQualityCheck(
+        id="estimated_pages", status=page_status, message=page_message,
+        suggestion="精简低相关内容后重新生成" if page_status != "PASS" else "",
+    ))
+    checks.append(ResumeQualityCheck(
+        id="section_structure", status="PASS" if version.sections and bullets else "FAIL",
+        message="经历章节结构完整" if version.sections and bullets else "简历缺少可用的经历内容",
+        suggestion="保留至少一段有证据的经历或项目" if not version.sections or not bullets else "",
+    ))
+    if report.uncovered_requirements:
+        checks.append(ResumeQualityCheck(
+            id="uncovered_requirements", status="WARN",
+            message="未找到候选人证据覆盖：" + "、".join(report.uncovered_requirements[:8]),
+            suggestion="保持为真实缺口，不要为了匹配岗位虚构技能。",
+        ))
+    else:
+        checks.append(ResumeQualityCheck(
+            id="uncovered_requirements", status="PASS", message="岗位要求均有候选人证据或已覆盖",
+        ))
     issues = list(dict.fromkeys(report.issues))
     if duplicates:
         issues.append(f"存在 {duplicates} 条重复内容")
@@ -305,12 +405,32 @@ def assess_draft_quality(version: ResumeDraftVersion, target: TargetJob) -> None
     if not version.sections or not bullets:
         issues.append("简历缺少可用的经历内容")
     report.issues = list(dict.fromkeys(issues))
+    report.checks = checks
+    report.status = "FAIL" if any(item.status == "FAIL" for item in checks) else (
+        "WARN" if any(item.status == "WARN" for item in checks) else "PASS"
+    )
     report.passed = bool(
-        report.passed and report.evidence_coverage == 100 and not duplicates
-        and report.estimated_pages <= 1.2 and version.sections and bullets
+        model_passed and report.status != "FAIL"
         and min(report.relevance_score, report.specificity_score,
                 report.structure_score, report.conciseness_score) >= 70
     )
+    if min(report.relevance_score, report.specificity_score,
+           report.structure_score, report.conciseness_score) < 70:
+        report.status = "FAIL"
+        report.checks.append(ResumeQualityCheck(
+            id="model_quality_scores", status="FAIL", message="模型质量评分未达到 70 分",
+            suggestion="补充事实或重新生成定向简历。",
+        ))
+    else:
+        report.checks.append(ResumeQualityCheck(
+            id="model_quality_scores", status="PASS", message="相关性、具体性、结构和简洁度均达到 70 分",
+        ))
+        if not model_passed:
+            report.status = "FAIL"
+            report.checks.append(ResumeQualityCheck(
+                id="model_quality_review", status="FAIL", message="模型质量评审未通过",
+                suggestion="根据质量评审意见修改后重新生成。",
+            ))
     if not report.passed:
         raise ResumeError("定向简历未通过质量检查：" + "；".join(report.issues[:5] or ["模型评分未达到 70 分"]))
 
@@ -407,9 +527,10 @@ class TailoringService:
                     source_type="resume", source_id=profile.profile_id, block_id=evidence_id,
                     quote=question.answer, section="用户补充", provenance="user_confirmed",
                 ))
+                entry_kind, entry_heading = supplement_entry_metadata(question.answer)
                 profile.resume_entries.append(ResumeSourceEntry(
-                    entry_id=f"source-entry-{evidence_id}", kind="other",
-                    heading="用户确认的补充经历", evidence_ids=[evidence_id],
+                    entry_id=f"source-entry-{evidence_id}", kind=entry_kind,
+                    heading=entry_heading, evidence_ids=[evidence_id],
                     original_bullets=[question.answer],
                 ))
                 existing.add(evidence_id)
@@ -516,6 +637,10 @@ class TailoringService:
         self.database.save_contact(value.contact)
         self.database.save_profile(profile)
         validate_draft(value, profile)
+        target = self.database.get_target_job(value.target_job_id)
+        if not target:
+            raise ResumeError("目标岗位不存在")
+        assess_draft_quality(value, target)
         return self.database.save_draft_version(value)
 
     def render_docx(self, version: ResumeDraftVersion, target: TargetJob,
@@ -653,7 +778,15 @@ class TailoringService:
         pdf_path = folder / f"{safe}_简历_v{version.version}_{export.template}.pdf"
         self.render_docx(version, target, export.template, docx_path)
         await self.render_pdf(self.render_html(version, target, export.template), pdf_path)
-        export.status = "SUCCEEDED"
         export.docx_path = str(docx_path)
         export.pdf_path = str(pdf_path)
+        export.qa_report = inspect_export(version, target, export.template, docx_path, pdf_path)
+        if export.qa_report.status == "FAIL":
+            export.status = "FAILED"
+            failed = [item.message for item in export.qa_report.checks if item.status == "FAIL"]
+            export.error = "导出验收未通过：" + "；".join(failed[:4])
+            self.database.save_resume_export(export)
+            raise ResumeError(export.error)
+        export.status = "SUCCEEDED"
+        export.error = None
         return self.database.save_resume_export(export)

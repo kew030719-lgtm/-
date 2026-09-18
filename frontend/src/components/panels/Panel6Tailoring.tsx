@@ -109,6 +109,11 @@ export default function Panel6Tailoring(props: Props) {
 
   const latestVersionId = draftBundle?.current.version_id
   const isLatest = edited != null && latestVersionId === edited.version_id
+  const qualityStatus = edited?.quality_report
+    ? (edited.quality_report.status === 'FAIL' && edited.quality_report.passed && !edited.quality_report.checks.length
+      ? 'PASS'
+      : edited.quality_report.status)
+    : null
   const questions = tailoring?.questions ?? []
   const showQuestions = tailoring != null && tailoring.status !== 'SUCCEEDED' && !tailoringBusy
 
@@ -316,7 +321,7 @@ export default function Panel6Tailoring(props: Props) {
 
         {edited?.quality_report ? (
           <div className="export-card">
-            <b>{edited.quality_report.passed ? '质量检查已通过' : '质量检查未通过'}</b>
+            <b>{qualityStatus === 'PASS' ? '生成质量检查已通过' : qualityStatus === 'WARN' ? '生成质量检查通过，但有提醒' : '生成质量检查未通过'}</b>
             <p>
               岗位相关性 {edited.quality_report.relevance_score} ·
               具体性 {edited.quality_report.specificity_score} ·
@@ -327,6 +332,16 @@ export default function Panel6Tailoring(props: Props) {
             </p>
             {edited.quality_report.uncovered_requirements.length ? (
               <p>尚无证据覆盖：{edited.quality_report.uncovered_requirements.join('、')}</p>
+            ) : null}
+            {edited.quality_report.checks?.length ? (
+              <div className="quality-checks">
+                {edited.quality_report.checks.map((check) => (
+                  <p key={check.id}>
+                    <b>{check.status === 'PASS' ? '合格' : check.status === 'WARN' ? '提醒' : '不合格'}</b>：{check.message}
+                    {check.suggestion ? `（建议：${check.suggestion}）` : ''}
+                  </p>
+                ))}
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -425,9 +440,22 @@ export default function Panel6Tailoring(props: Props) {
           {exportLinks?.map((item) => (
             <div className="export-card" key={item.export_id}>
               <b>{item.template === 'technical' ? '简洁技术版' : '紧凑商务版'}</b>
+              {item.qa_report ? (
+                <p>
+                  导出检查：{item.qa_report.status === 'PASS' ? '合格' : item.qa_report.status === 'WARN' ? '有提醒' : '不合格'} ·
+                  实际 {item.qa_report.page_count} 页 · ATS 文本层 {item.qa_report.ats_extractable ? '可读取' : '不可读取'}
+                </p>
+              ) : null}
+              {item.qa_report?.checks?.filter((check) => check.status !== 'PASS').map((check) => (
+                <p key={check.id}>{check.status === 'FAIL' ? '不合格' : '提醒'}：{check.message}{check.suggestion ? `（建议：${check.suggestion}）` : ''}</p>
+              ))}
               <br />
-              <a href={`/api/resume-exports/${item.export_id}/download?format=docx`}>下载 DOCX</a>
-              <a href={`/api/resume-exports/${item.export_id}/download?format=pdf`}>下载 PDF</a>
+              {item.status === 'SUCCEEDED' && item.qa_report?.status !== 'FAIL' ? (
+                <>
+                  <a href={`/api/resume-exports/${item.export_id}/download?format=docx`}>下载 DOCX</a>
+                  <a href={`/api/resume-exports/${item.export_id}/download?format=pdf`}>下载 PDF</a>
+                </>
+              ) : <span>存在不合格项目，修复后重新导出</span>}
             </div>
           ))}
           {resumeBusy && !exportLinks?.length ? (

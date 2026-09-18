@@ -396,7 +396,27 @@ class ResumeQualityReport(BaseModel):
     estimated_pages: float = Field(default=1.0, ge=0.1)
     issues: list[str] = Field(default_factory=list)
     uncovered_requirements: list[str] = Field(default_factory=list)
+    checks: list["ResumeQualityCheck"] = Field(default_factory=list)
+    status: Literal["PASS", "WARN", "FAIL"] = "FAIL"
     passed: bool = False
+
+
+class ResumeQualityCheck(BaseModel):
+    """A user-facing, machine-readable quality gate result."""
+
+    id: str
+    status: Literal["PASS", "WARN", "FAIL"]
+    message: str
+    suggestion: str = ""
+
+
+class ResumeExportQAReport(BaseModel):
+    """Checks performed against the actual exported files."""
+
+    status: Literal["PASS", "WARN", "FAIL"] = "FAIL"
+    checks: list[ResumeQualityCheck] = Field(default_factory=list)
+    page_count: int = 0
+    ats_extractable: bool = False
 
 
 class ResumeDraftVersion(BaseModel):
@@ -426,5 +446,6 @@ class ResumeExport(BaseModel):
     docx_path: str = ""
     pdf_path: str = ""
     error: str | None = None
+    qa_report: ResumeExportQAReport = Field(default_factory=ResumeExportQAReport)
     created_at: str
     updated_at: str

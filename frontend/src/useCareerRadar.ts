@@ -306,7 +306,9 @@ export function useCareerRadar() {
           schedule(() => void pollDiscovery(runId, gen, profileId), 2000)
           return
         }
-        if (task.status !== 'SUCCEEDED') throw new Error(task.error || task.message)
+        if (task.status !== 'SUCCEEDED') {
+          throw new Error(task.error || task.message)
+        }
         await startComparisonFor(runId, gen, profileId)
       } catch (error) {
         toast((error as Error).message)
@@ -620,7 +622,15 @@ export function useCareerRadar() {
           schedule(() => void pollExports(taskId, exportIds), 1000)
           return
         }
-        if (task.status !== 'SUCCEEDED') throw new Error(task.error || task.message)
+        if (task.status !== 'SUCCEEDED') {
+          const exports = await Promise.all(
+            exportIds.map((id: string) => api<ResumeExport>(`/api/resume-exports/${id}`)),
+          )
+          const message = task.error || task.message
+          patch({ exportLinks: exports, exportError: message, resumeBusy: false })
+          toast(message)
+          return
+        }
         const exports = await Promise.all(
           exportIds.map((id) => api<ResumeExport>(`/api/resume-exports/${id}`)),
         )
