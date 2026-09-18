@@ -28,6 +28,9 @@ from .schemas import (
 from .sites.base import is_benefit_label
 
 
+SYNTHETIC_ENTRY_HEADINGS = {"用户确认的补充经历"}
+
+
 def _stable_id(prefix: str, value: str) -> str:
     return f"{prefix}_{hashlib.sha256(value.encode()).hexdigest()[:12]}"
 
@@ -275,7 +278,7 @@ def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile, *,
                           entry.evidence_ids, entry.entry_id)
             entry_quotes = " ".join(sources[item].quote for item in entry.evidence_ids)
             for metadata in (entry.heading, entry.subheading, entry.date_range):
-                if metadata and metadata not in entry_quotes:
+                if metadata and metadata not in SYNTHETIC_ENTRY_HEADINGS and metadata not in entry_quotes:
                     raise ResumeError(f"简历条目出现未经证实的标题或日期：{metadata}")
             allowed = set(entry.evidence_ids)
             if any(not set(bullet.evidence_ids).issubset(allowed) for bullet in entry.bullets):

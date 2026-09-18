@@ -10,7 +10,8 @@ from docx import Document
 from career_radar.config import Settings
 from career_radar.resume import ResumeError, build_profile, extract_candidate_contact, skill_is_grounded
 from career_radar.schemas import (
-    Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion, ResumeSourceEntry, TailoringQuestion,
+    Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion, ResumeEntry, ResumeSection,
+    ResumeSourceEntry, TailoringQuestion,
 )
 from career_radar.sites import FetchResult
 from career_radar.tailoring import (
@@ -390,6 +391,39 @@ def test_public_profile_repairs_historical_project_link_entry(tmp_path):
     assert projects[0].heading == "股票数据项目"
     quotes = {item.block_id: item.quote for item in public.evidence}
     assert any("gitee.com/wk132/data-agent.git" in quotes[item] for item in projects[0].evidence_ids)
+
+
+def test_synthetic_supplement_entry_heading_is_not_treated_as_candidate_fact(tmp_path):
+    app = create_app(settings(tmp_path))
+    app.state.database.initialize()
+    profile = build_profile(
+        "张三\n项目经历\n股票数据项目\n使用 Python 完成数据处理和结果保存。",
+        "profile_synthetic_entry_heading",
+    )
+    contact = extract_candidate_contact(profile)
+    answer_id = "resume-supplement-confirmed"
+    answer = "我独立完成股票信息数据爬虫，负责采集和整理结果。"
+    profile.evidence.append(Evidence(
+        source_type="resume", source_id=profile.profile_id, block_id=answer_id,
+        quote=answer, section="用户补充", provenance="user_confirmed",
+    ))
+    version = ResumeDraftVersion(
+        version_id="version_synthetic_entry_heading", draft_id="draft_synthetic_entry_heading", version=1,
+        tailoring_id="tailor_synthetic_entry_heading", profile_id=profile.profile_id,
+        target_job_id="target_synthetic_entry_heading", headline="数据工程师",
+        sections=[ResumeSection(
+            section_id="section_other", title="其他信息", entries=[ResumeEntry(
+                entry_id="source-entry-resume-supplement-confirmed",
+                heading="用户确认的补充经历", evidence_ids=[answer_id],
+                bullets=[ResumeBullet(
+                    bullet_id="bullet_synthetic_entry_heading", text=answer,
+                    evidence_ids=[answer_id], provenance="user_confirmed",
+                )],
+            )],
+        )],
+        contact=contact, created_at=datetime.now(UTC).isoformat(),
+    )
+    validate_draft(version, profile)
 
 
 def test_tailoring_evaluation_set_contains_ten_anonymized_graduate_cases():
