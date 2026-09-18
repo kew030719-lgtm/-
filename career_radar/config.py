@@ -12,7 +12,7 @@ load_dotenv(ROOT / ".env", override=False)
 
 
 def default_data_dir() -> Path:
-    """Return the per-user data directory used by an installed app."""
+    """Return the local data directory used by the source/web runtime."""
     override = os.getenv("APP_DATA_DIR")
     if override:
         return Path(override).expanduser().resolve()

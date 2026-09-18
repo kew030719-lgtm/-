@@ -1,4 +1,4 @@
-"""Non-secret desktop settings and model-key storage.
+"""Non-secret local settings and model-key storage.
 
 The JSON file deliberately excludes the API key. On Windows the key is stored
 through Credential Manager via ``keyring``; tests and source checkouts use an

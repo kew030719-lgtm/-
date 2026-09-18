@@ -14,8 +14,4 @@ playwright-report/
 # Frontend: dependencies and the built SPA (produced by `npm run build`).
 frontend/node_modules/
 career_radar/static/app/
-frontend/src-tauri/target/
-frontend/src-tauri/binaries/*.exe
-packaging/build/
-packaging/dist/
 dist/

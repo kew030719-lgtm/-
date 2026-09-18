@@ -9,8 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test",
-    "tauri": "tauri"
+    "check": "npm run typecheck && npm run test"
   },
   "dependencies": {
     "react": "^19.3.0",
@@ -20,7 +19,6 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
-    "@tauri-apps/cli": "^2.8.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vitest": "^4.1.11"

@@ -1,6 +1,6 @@
 # CareerRadar
 
-CareerRadar 是一个 Windows 优先、本地单用户、面向高校毕业生的简历驱动求职 Agent。它把简历拆成稳定证据块，由 PydanticAI Agent 推荐岗位方向；用户确认方向和城市后，自研抓取器读取三个招聘站点的公开页面，再以固定权重排名并校验所有引用。LangGraph 负责编排 Agent 调用、审批状态和故障恢复。模型由用户自行配置服务地址、模型名和密钥。
+CareerRadar 是一个本地单用户、面向高校毕业生的网页求职 Agent。它把简历拆成稳定证据块，由 PydanticAI Agent 推荐岗位方向；用户确认方向和城市后，自研抓取器读取三个招聘站点的公开页面，再以固定权重排名并校验所有引用。LangGraph 负责编排 Agent 调用、审批状态和故障恢复。模型由用户自行配置服务地址、模型名和密钥。
 
 ## 产品流程
 
@@ -27,13 +27,7 @@ CareerRadar 是一个 Windows 优先、本地单用户、面向高校毕业生�
 
 ## 快速启动
 
-### Windows 安装包（发布通道）
-
-手动运行 `.github/workflows/windows-release.yml` 可构建 PyInstaller sidecar 与 Tauri 2 的 MSI/NSIS 安装包。安装版把 SQLite、导出和日志放在 `%LOCALAPPDATA%\CareerRadar`；首次启动向导配置模型服务并测试连接，密钥通过 Windows Credential Manager 保存。完整构建步骤和仍需真人验收的签名、卸载、更新、Chrome Web Store 项目见 [Windows 发布与验收](docs/WINDOWS_RELEASE.md)。
-
-当前 Linux 开发环境未生成 Windows 安装包；在全新 Windows 虚拟机通过发布清单前，不把它标记为已发布。
-
-### 源码开发
+### 本地网页运行
 
 ```bash
 cp .env.example .env          # 在 .env 中填写 TOKEN_PLAN_API_KEY
