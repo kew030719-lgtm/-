@@ -5,16 +5,20 @@ from docx import Document
 from pypdf import PdfWriter
 
 from career_radar.resume_qa import inspect_export
+from career_radar.resume import build_profile
 from career_radar.schemas import (
     CandidateContact,
     CandidateProfile,
     Evidence,
     JobSnapshot,
+    ResumeBullet,
     ResumeDraftVersion,
+    ResumeEntry,
+    ResumeSection,
     ResumeSourceEntry,
     TargetJob,
 )
-from career_radar.tailoring import _public_profile, supplement_entry_metadata
+from career_radar.tailoring import _public_profile, _repair_draft_source_metadata, supplement_entry_metadata
 
 
 def _version(target: TargetJob) -> ResumeDraftVersion:
@@ -52,6 +56,72 @@ def test_confirmed_project_answer_gets_a_project_heading():
     assert supplement_entry_metadata("我有过爬虫经验，写过股票信息数据爬虫，项目仓库地址：https://example.com") == (
         "project", "股票信息数据爬虫",
     )
+
+
+def test_resume_parser_keeps_project_title_date_and_bullets_together():
+    profile = build_profile("""王科
+教育经历
+湖南人文科技学院
+2025-06 - 2027-09
+计算机科学与技术 | 本科
+项目经历
+Text-to-SQL 智能Agent系统
+2026-02 - 2026-03
+项目地址：https://gitee.com/wk132/data-agent.git
+1. 设计并实现基于 LangGraph 的多节点 Agent 管线。
+RAG 知识库系统
+2026-04 - 2027-05
+项目地址：https://gitee.com/wk132/rag-knowledge-base.git
+1. 设计并实现基于 LangGraph 的 RAG 知识库系统。
+""")
+    projects = [entry for entry in profile.resume_entries if entry.kind == "project"]
+    assert [(entry.heading, entry.date_range) for entry in projects] == [
+        ("Text-to-SQL 智能Agent系统", "2026-02 - 2026-03"),
+        ("RAG 知识库系统", "2026-04 - 2027-05"),
+    ]
+    assert len(projects[0].evidence_ids) == 4
+    education = next(entry for entry in profile.resume_entries if entry.kind == "education")
+    assert education.heading == "湖南人文科技学院"
+    assert education.date_range == "2025-06 - 2027-09"
+
+
+def test_old_draft_metadata_is_repaired_from_source_entries():
+    profile = build_profile("""王科
+教育经历
+湖南人文科技学院
+2025-06 - 2027-09
+计算机科学与技术 | 本科
+项目经历
+Text-to-SQL 智能Agent系统
+2026-02 - 2026-03
+项目地址：https://gitee.com/wk132/data-agent.git
+1. 设计并实现基于 LangGraph 的多节点 Agent 管线。
+""")
+    target = TargetJob(
+        target_job_id="target_1", profile_id=profile.profile_id, source_type="pasted",
+        company="星图科技", title="Python 后端工程师", cleaned_text="Python 后端工程师",
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    version = _version(target)
+    version.sections = [
+        ResumeSection(
+            section_id="section_project", title="项目经历", entries=[ResumeEntry(
+                entry_id="entry_old", heading="2026-02 - 2026-03",
+                date_range="2026-02 - 2026-03",
+                evidence_ids=[item.block_id for item in profile.evidence if "项目" in item.block_id][:4],
+                bullets=[ResumeBullet(
+                    bullet_id="bullet_1", text="设计并实现基于 LangGraph 的多节点 Agent 管线。",
+                    evidence_ids=[item.block_id for item in profile.evidence if "多节点" in item.quote],
+                    provenance="uploaded_resume",
+                )],
+                )],
+        )
+    ]
+    assert _repair_draft_source_metadata(version, profile) is True
+    entry = version.sections[0].entries[0]
+    assert entry.heading == "Text-to-SQL 智能Agent系统"
+    assert entry.date_range == "2026-02 - 2026-03"
+    assert entry.links == ["https://gitee.com/wk132/data-agent.git"]
 
 
 def test_export_qa_reports_page_count_and_ats_state(tmp_path: Path):

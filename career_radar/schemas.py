@@ -237,6 +237,10 @@ class CandidateContact(BaseModel):
     phone: str = ""
     email: str = ""
     location: str = ""
+    # Optional local asset extracted from an uploaded visual resume. It never
+    # enters model prompts and is only used to preserve the source template's
+    # portrait during local export.
+    photo_path: str = ""
 
 
 class TargetJob(BaseModel):
@@ -375,6 +379,7 @@ class ResumeEntry(BaseModel):
     heading: str
     subheading: str = ""
     date_range: str = ""
+    links: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
     bullets: list[ResumeBullet] = Field(default_factory=list)
 

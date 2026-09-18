@@ -4,6 +4,7 @@ import hashlib
 import html
 import json
 import re
+import base64
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,9 @@ from docx.shared import Inches, Pt, RGBColor
 from .agent import AgentService, _extract_json
 from .database import Database, now_iso
 from .resume import (
-    EMAIL_RE, PHONE_RE, SKILLS, ResumeError, ResumeGenerationError, extract_candidate_contact,
+    EMAIL_RE, PHONE_RE, PROJECT_LINK_LABEL_RE, SKILLS, URL_RE, ResumeError,
+    ResumeGenerationError, _resume_entries,
+    extract_candidate_contact,
     sanitize_candidate_contact,
     skill_is_grounded,
 )
@@ -30,6 +33,18 @@ from .sites.base import is_benefit_label
 
 
 SYNTHETIC_ENTRY_HEADINGS = {"用户确认的补充经历", "用户补充项目经历"}
+
+
+def _display_bullet_text(text: str, links: list[str] | None = None) -> str:
+    """Keep repository URLs in the dedicated project-link row only."""
+    value = text
+    for link in links or []:
+        value = re.sub(
+            rf"(?:项目代码仓库|项目地址|项目链接|仓库地址|代码仓库|仓库链接)?\s*{re.escape(link)}",
+            "", value,
+        )
+    value = re.sub(r"(?:项目代码仓库|项目地址|项目链接|仓库地址|代码仓库|仓库链接)\s*$", "", value)
+    return value.strip(" ，,；;")
 
 
 def supplement_entry_metadata(answer: str) -> tuple[str, str]:
@@ -253,8 +268,26 @@ def _public_profile(profile: CandidateProfile, contact: CandidateContact) -> Can
         any(secret in item.quote for secret in private)
     )]
     safe = {item.block_id: item.quote for item in value.evidence}
-    entries = []
+    # Rebuild source entries from the ordered evidence. Older OCR runs stored
+    # a project title, date and repository link as three separate entries; the
+    # parser now groups them, and this migration repairs those profiles when a
+    # new tailored resume is generated.
+    original_entries = [entry for entry in _resume_entries(value.evidence) if not all(
+        next((e.section for e in value.evidence if e.block_id == evidence_id), "") == "用户补充"
+        for evidence_id in entry.evidence_ids
+    )]
+    supplemental_entries = []
     for entry in value.resume_entries:
+        entry.evidence_ids = [item for item in entry.evidence_ids if item in safe]
+        entry.original_bullets = [safe[item] for item in entry.evidence_ids]
+        if entry.evidence_ids and any(
+            next((e.section for e in value.evidence if e.block_id == evidence_id), "") == "用户补充"
+            for evidence_id in entry.evidence_ids
+        ):
+            supplemental_entries.append(entry)
+    entries = []
+    supplemental_by_key: dict[str, ResumeSourceEntry] = {}
+    for entry in [*original_entries, *supplemental_entries]:
         entry.evidence_ids = [item for item in entry.evidence_ids if item in safe]
         entry.original_bullets = [safe[item] for item in entry.evidence_ids]
         if entry.evidence_ids:
@@ -262,6 +295,22 @@ def _public_profile(profile: CandidateProfile, contact: CandidateContact) -> Can
                 entry.kind, entry.heading = supplement_entry_metadata(
                     " ".join(entry.original_bullets),
                 )
+            if any(
+                next((e.section for e in value.evidence if e.block_id == evidence_id), "") == "用户补充"
+                for evidence_id in entry.evidence_ids
+            ):
+                urls = re.findall(r"https?://[^\s，。；;）)]+", " ".join(entry.original_bullets), re.I)
+                key = (urls[0].lower() if urls else entry.heading.lower())
+                previous = supplemental_by_key.get(key)
+                if previous:
+                    previous.evidence_ids.extend(
+                        item for item in entry.evidence_ids if item not in previous.evidence_ids
+                    )
+                    previous.original_bullets.extend(
+                        item for item in entry.original_bullets if item not in previous.original_bullets
+                    )
+                    continue
+                supplemental_by_key[key] = entry
             is_project_link = (
                 entry.kind == "project"
                 and (
@@ -282,6 +331,105 @@ def _public_profile(profile: CandidateProfile, contact: CandidateContact) -> Can
             entries.append(entry)
     value.resume_entries = entries
     return value
+
+
+def _repair_draft_source_metadata(version: ResumeDraftVersion,
+                                  profile: CandidateProfile) -> bool:
+    """Repair metadata from older drafts without rewriting their bullet text.
+
+    Before structured source entries were introduced, OCR/model output could
+    use the date as an entry heading and omit the project name or repository.
+    The bullets are still kept as-is and remain evidence-validated; only the
+    citable heading, date, subtitle and links are restored from the uploaded
+    resume.  This makes re-exporting an existing draft safe and consistent
+    with newly generated drafts.
+    """
+    # Reuse the same migration used for a fresh generation. This repairs old
+    # OCR rows and collapses duplicate answers that point to the same repo.
+    public = _public_profile(profile, CandidateContact(profile_id=profile.profile_id))
+    sources = {item.block_id: item for item in public.evidence}
+    source_entries = public.resume_entries
+    by_kind: dict[str, list[ResumeSourceEntry]] = {}
+    for entry in source_entries:
+        by_kind.setdefault(entry.kind, []).append(entry)
+    used: set[str] = set()
+    changed = False
+
+    def links_for(entry: ResumeSourceEntry) -> list[str]:
+        found: list[str] = []
+        for evidence_id in entry.evidence_ids:
+            quote = sources.get(evidence_id)
+            if not quote:
+                continue
+            for link in re.findall(r"https?://[^\s，。；;）)]+", quote.quote, re.I):
+                value = link.rstrip(".,，。；;")
+                if value not in found:
+                    found.append(value)
+        return found
+
+    def subtitle_for(entry: ResumeSourceEntry) -> str:
+        excluded = {entry.heading.strip(), entry.date_range.strip()}
+        for evidence_id in entry.evidence_ids:
+            quote = sources.get(evidence_id)
+            if not quote:
+                continue
+            value = quote.quote.strip()
+            if value in excluded or URL_RE.search(value) or PROJECT_LINK_LABEL_RE.search(value):
+                continue
+            if entry.kind == "education" and ("本科" in value or "硕士" in value or "专业" in value):
+                return value
+        return ""
+
+    for section in version.sections:
+        kind = {"项目经历": "project", "工作经历": "experience", "教育经历": "education",
+                "补充经历": "project", "其他信息": "other"}.get(section.title)
+        if not kind:
+            continue
+        candidates = by_kind.get(kind, [])
+        if section.title in {"补充经历", "其他信息"}:
+            # Historical drafts put confirmed project answers in an "other"
+            # section. Match cited IDs against project entries first, then use
+            # the generic entries only when no project evidence is present.
+            candidates = [*by_kind.get("project", []), *candidates]
+        for draft_entry in section.entries:
+            overlap = set(draft_entry.evidence_ids)
+            match = next((entry for entry in candidates
+                          if entry.entry_id not in used and overlap.intersection(entry.evidence_ids)), None)
+            if match is None:
+                # A very old row may have lost its citations. Keep the original
+                # order as a conservative fallback, but never merge entries.
+                match = next((entry for entry in candidates if entry.entry_id not in used), None)
+            if match is None:
+                continue
+            used.add(match.entry_id)
+            new_heading = match.heading
+            new_date = match.date_range
+            new_subheading = draft_entry.subheading or subtitle_for(match)
+            new_links = links_for(match)
+            if (draft_entry.heading, draft_entry.date_range, draft_entry.subheading,
+                    draft_entry.links) != (new_heading, new_date, new_subheading, new_links):
+                draft_entry.heading = new_heading
+                draft_entry.date_range = new_date
+                draft_entry.subheading = new_subheading
+                draft_entry.links = new_links
+                draft_entry.evidence_ids = list(dict.fromkeys(match.evidence_ids))
+                changed = True
+            if section.title in {"补充经历", "其他信息"} and match.kind == "project":
+                section.title = "项目经历"
+                changed = True
+    # Merge the migrated project answer into the existing project section so it
+    # is displayed as a real project, never as an internal "other" block.
+    merged: list[ResumeSection] = []
+    for section in version.sections:
+        previous = next((item for item in merged if item.title == section.title), None)
+        if previous is None:
+            merged.append(section)
+            continue
+        previous.entries.extend(section.entries)
+        previous.bullets.extend(section.bullets)
+        changed = True
+    version.sections = merged
+    return changed
 
 
 def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile, *,
@@ -645,6 +793,12 @@ class TailoringService:
 
     def render_docx(self, version: ResumeDraftVersion, target: TargetJob,
                     template: str, output: Path) -> None:
+        if template in {"technical", "business"}:
+            self._render_original_docx(version, target, template, output)
+            return
+
+        # Kept below for reference while older exported versions are read; all
+        # new DOCX files use the source resume's visual shell above.
         document = Document()
         section = document.sections[0]
         section.top_margin = Inches(0.55)
@@ -724,32 +878,155 @@ class TailoringService:
         document.save(output)
 
     @staticmethod
-    def render_html(version: ResumeDraftVersion, target: TargetJob, template: str) -> str:
-        def bullets(values: list[ResumeBullet]) -> str:
-            items = "".join(f"<li>{html.escape(item.text)}</li>" for item in sorted(values, key=lambda value: value.priority, reverse=True))
-            return f"<ul>{items}</ul>" if items else ""
-        def skills(values: list[ResumeBullet]) -> str:
-            value = " · ".join(html.escape(item.text) for item in sorted(values, key=lambda item: item.priority, reverse=True))
-            return f"<p class='skills'>{value}</p>" if value else ""
-        sections = []
-        if template == "technical":
-            sections.extend([("专业技能", skills(version.skills)), ("个人概述", bullets(version.summary))])
+    def _render_original_docx(version: ResumeDraftVersion, target: TargetJob,
+                              template: str, output: Path) -> None:
+        """Render both variants inside the uploaded resume's visual shell."""
+        document = Document()
+        section = document.sections[0]
+        section.page_width = Inches(8.27)
+        section.page_height = Inches(17.83)
+        section.top_margin = Inches(0.45)
+        section.bottom_margin = Inches(0.45)
+        section.left_margin = Inches(0.62)
+        section.right_margin = Inches(0.62)
+        styles = document.styles
+        styles["Normal"].font.name = "Noto Sans CJK SC"
+        styles["Normal"].font.size = Pt(10.5)
+        styles["Normal"].paragraph_format.space_after = Pt(1)
+        orange = RGBColor(239, 137, 72)
+        gray = RGBColor(112, 112, 112)
+
+        header = document.add_table(rows=1, cols=2)
+        header.autofit = False
+        header.columns[0].width = Inches(1.35)
+        header.columns[1].width = Inches(5.45)
+        photo_cell, info_cell = header.rows[0].cells
+        photo = photo_cell.paragraphs[0]
+        photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        photo_path = Path(version.contact.photo_path) if version.contact.photo_path else None
+        if photo_path and photo_path.is_file():
+            photo_run = photo.add_run()
+            photo_run.add_picture(str(photo_path), width=Inches(1.25))
         else:
-            sections.append(("个人概述", bullets(version.summary)))
-        priorities = {"项目经历": 0, "工作经历": 1, "补充技能": 2, "教育经历": 3, "其他信息": 4} if template == "technical" else {"工作经历": 0, "项目经历": 1, "教育经历": 2, "补充技能": 3, "其他信息": 4}
-        for section in sorted(version.sections, key=lambda item: priorities.get(item.title, 9)):
-            body = bullets(section.bullets)
-            for entry in section.entries:
-                body += f"<h3>{html.escape(entry.heading)} <small>{html.escape(entry.subheading)} {html.escape(entry.date_range)}</small></h3>{bullets(entry.bullets)}"
-            sections.append((section.title, body))
-        if template == "business":
-            sections.append(("专业技能", skills(version.skills)))
-        body = "".join(f"<section><h2>{html.escape(title)}</h2>{content}</section>" for title, content in sections if content)
+            photo_run = photo.add_run("●")
+            photo_run.font.size = Pt(58)
+            photo_run.font.color.rgb = orange
+        name = info_cell.paragraphs[0]
+        name.paragraph_format.space_after = Pt(2)
+        name_run = name.add_run(version.contact.name or "个人简历")
+        name_run.bold = True
+        name_run.font.size = Pt(24)
+        contacts = "  ·  ".join(filter(None, [version.contact.phone, version.contact.email, version.contact.location]))
+        if contacts:
+            p = info_cell.add_paragraph(contacts)
+            p.paragraph_format.space_after = Pt(2)
+        target_paragraph = document.add_paragraph(f"目标岗位：{target.company} · {target.title}")
+        target_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        target_paragraph.paragraph_format.space_after = Pt(2)
+        target_paragraph.runs[0].font.color.rgb = orange
+        rule = document.add_paragraph("─" * 105)
+        rule.paragraph_format.space_after = Pt(2)
+        rule.runs[0].font.color.rgb = RGBColor(225, 225, 225)
+
+        def add_heading(text: str) -> None:
+            paragraph = document.add_paragraph()
+            paragraph.paragraph_format.space_before = Pt(6)
+            paragraph.paragraph_format.space_after = Pt(2)
+            run = paragraph.add_run(text)
+            run.bold = True
+            run.font.size = Pt(14)
+            accent = paragraph.add_run("  ━━━━━")
+            accent.font.size = Pt(8)
+            accent.font.color.rgb = orange
+
+        def add_bullets(values: list[ResumeBullet], links: list[str] | None = None) -> None:
+            for item in sorted(values, key=lambda bullet: bullet.priority, reverse=True):
+                paragraph = document.add_paragraph(style="List Number")
+                paragraph.paragraph_format.left_indent = Inches(0.18)
+                paragraph.paragraph_format.space_after = Pt(1)
+                paragraph.paragraph_format.line_spacing = 1.05
+                paragraph.add_run(_display_bullet_text(item.text, links))
+
+        if version.summary:
+            add_heading("求职意向")
+            add_bullets(version.summary[:2])
+        priorities = {"教育经历": 0, "项目经历": 1, "工作经历": 2, "其他信息": 3, "补充技能": 4}
+        for section_value in sorted(version.sections, key=lambda item: priorities.get(item.title, 9)):
+            if not section_value.entries and not section_value.bullets:
+                continue
+            add_heading(section_value.title)
+            add_bullets(section_value.bullets)
+            for entry in section_value.entries:
+                paragraph = document.add_paragraph()
+                paragraph.paragraph_format.space_before = Pt(2)
+                paragraph.paragraph_format.space_after = Pt(1)
+                run = paragraph.add_run(entry.heading if entry.heading != entry.date_range else "")
+                run.bold = True
+                if entry.date_range:
+                    date_run = paragraph.add_run(f"  {entry.date_range}")
+                    date_run.font.color.rgb = gray
+                for link in entry.links:
+                    link_paragraph = document.add_paragraph(f"项目地址：{link}")
+                    link_paragraph.paragraph_format.space_after = Pt(1)
+                    link_paragraph.runs[0].font.color.rgb = gray
+                add_bullets(entry.bullets, entry.links)
+        if version.skills:
+            add_heading("相关技能")
+            paragraph = document.add_paragraph(" · ".join(item.text for item in version.skills))
+            paragraph.paragraph_format.line_spacing = 1.05
+        document.core_properties.title = f"{target.company} {version.headline} 定向简历"
+        document.core_properties.author = version.contact.name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        document.save(output)
+
+    @staticmethod
+    def render_html(version: ResumeDraftVersion, target: TargetJob, template: str) -> str:
+        def bullets(values: list[ResumeBullet], links: list[str] | None = None) -> str:
+            items = "".join(
+                f"<li>{html.escape(_display_bullet_text(item.text, links))}</li>"
+                for item in sorted(values, key=lambda value: value.priority, reverse=True)
+            )
+            return f"<ul>{items}</ul>" if items else ""
+
+        def section_html(title: str, value: ResumeSection) -> str:
+            body = bullets(value.bullets)
+            for entry in value.entries:
+                title_value = "" if entry.heading == entry.date_range else entry.heading
+                meta = " · ".join(filter(None, [entry.subheading, entry.date_range]))
+                links = "".join(
+                    f"<p class='project-link'>项目地址：{html.escape(link)}</p>"
+                    for link in entry.links
+                )
+                body += (
+                    f"<div class='entry'><div class='entry-head'><strong>{html.escape(title_value)}</strong>"
+                    f"<span>{html.escape(meta)}</span></div>{links}{bullets(entry.bullets, entry.links)}</div>"
+                )
+            return f"<section><h2>{html.escape(title)}</h2>{body}</section>" if body else ""
+
         contact = " · ".join(filter(None, [version.contact.phone, version.contact.email, version.contact.location]))
-        accent = "#102dff" if template == "technical" else "#193b2d"
+        priorities = {"教育经历": 0, "项目经历": 1, "工作经历": 2, "其他信息": 3, "补充技能": 4}
+        content: list[str] = []
+        if version.summary:
+            content.append(section_html(
+                "求职意向", ResumeSection(section_id="summary", title="求职意向", bullets=version.summary[:2]),
+            ))
+        content.extend(
+            section_html(value.title, value)
+            for value in sorted(version.sections, key=lambda item: priorities.get(item.title, 9))
+        )
+        if version.skills:
+            skills = html.escape(" · ".join(item.text for item in version.skills))
+            content.append(f"<section><h2>相关技能</h2><p class='skills'>{skills}</p></section>")
+        body = "".join(item for item in content if item)
+        initials = html.escape((version.contact.name or "简历")[:1])
+        photo_markup = f"<div class='photo'>{initials}</div>"
+        photo_path = Path(version.contact.photo_path) if version.contact.photo_path else None
+        if photo_path and photo_path.is_file():
+            encoded = base64.b64encode(photo_path.read_bytes()).decode("ascii")
+            photo_markup = f"<img class='photo photo-image' src='data:image/png;base64,{encoded}' alt='个人照片'>"
         return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
-        @page{{size:A4;margin:13mm 16mm}}*{{box-sizing:border-box}}body{{font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;color:#101828;font-size:10pt;line-height:1.4;margin:0}}header{{text-align:center;margin-bottom:4mm}}h1{{font-size:22pt;margin:0;color:#000}}header p{{margin:1.5mm 0;color:#475467}}.target{{color:{accent};font-weight:700}}h2{{font-size:12pt;color:#000;border-bottom:1.5px solid {accent};padding-bottom:1mm;margin:3mm 0 1.2mm}}h3{{font-size:10pt;margin:2mm 0 1mm}}h3 small{{font-weight:400;color:#667085}}ul{{margin:0;padding-left:5mm}}li{{margin:0 0 .8mm;break-inside:avoid}}.skills{{margin:0;line-height:1.6}}section{{break-inside:auto}}
-        </style></head><body><header><h1>{html.escape(version.contact.name or '个人简历')}</h1><p>{html.escape(contact)}</p><p class='target'>目标岗位：{html.escape(target.company)} · {html.escape(version.headline)}</p></header>{body}</body></html>"""
+        @page{{size:210mm 453mm;margin:0}}*{{box-sizing:border-box}}body{{font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;color:#333;font-size:11pt;line-height:1.55;margin:0;padding:13mm 16mm 10mm;background:#fff}}header{{display:grid;grid-template-columns:36mm 1fr;column-gap:10mm;align-items:center;padding-bottom:7mm;border-bottom:1px solid #e4e4e4}}.photo{{width:31mm;height:31mm;border:2px solid #f29a5c;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#f29a5c;font-size:24pt;font-weight:700;background:#fff7f0;object-fit:cover}}.photo-image{{padding:0;background:#fff}}h1{{font-size:25pt;margin:0 0 2mm;color:#111;font-weight:800}}.contact{{font-size:10.5pt;color:#555;margin:1mm 0}}.target{{color:#f08b4b;font-weight:700;font-size:11.5pt;margin:2mm 0 0}}section{{padding:5mm 0 4mm;border-bottom:1px solid #e5e5e5;break-inside:avoid}}h2{{font-size:15pt;color:#222;margin:0 0 2.5mm;font-weight:800}}h2::after{{content:'';display:block;width:23mm;height:1.2mm;background:#f29a5c;margin-top:1.5mm}}ul{{margin:0;padding-left:6mm}}li{{margin:0 0 1.2mm;break-inside:avoid}}.entry{{margin:2mm 0 3mm;break-inside:avoid}}.entry-head{{display:flex;justify-content:space-between;gap:5mm;font-size:12pt;margin-bottom:1mm}}.entry-head span{{color:#666;font-size:10.5pt;white-space:nowrap}}.project-link{{margin:0 0 1mm;color:#666;font-size:10.5pt}}.skills{{margin:0;line-height:1.7}}section:last-child{{border-bottom:0}}
+        </style></head><body><header>{photo_markup}<div><h1>{html.escape(version.contact.name or '个人简历')}</h1><p class='contact'>{html.escape(contact)}</p><p class='target'>目标岗位：{html.escape(target.company)} · {html.escape(target.title)}</p></div></header>{body}</body></html>"""
 
     async def render_pdf(self, html_value: str, output: Path) -> None:
         from playwright.async_api import async_playwright
@@ -758,7 +1035,7 @@ class TailoringService:
             browser = await playwright.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.set_content(html_value, wait_until="load")
-            await page.pdf(path=str(output), format="A4", print_background=True,
+            await page.pdf(path=str(output), print_background=True, prefer_css_page_size=True,
                            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"})
             await browser.close()
 
@@ -769,6 +1046,15 @@ class TailoringService:
         version = self.database.get_draft_version(export.version_id)
         if not version or version.validation_status != "VALID":
             raise ResumeError("简历版本不存在或未通过校验")
+        profile = self.database.get_profile(version.profile_id)
+        if not profile:
+            raise ResumeError("候选人画像不存在")
+        version.contact = sanitize_candidate_contact(version.contact)
+        self.database.save_contact(version.contact)
+        if _repair_draft_source_metadata(version, profile):
+            # Persist the repaired metadata so the preview, subsequent exports
+            # and the user-edit flow all see the same project headings/links.
+            self.database.update_draft_version(version)
         target = self.database.get_target_job(version.target_job_id)
         if not target:
             raise ResumeError("目标岗位不存在")

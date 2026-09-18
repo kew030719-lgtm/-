@@ -146,11 +146,15 @@ def _looks_entry_heading(text: str, section: str) -> bool:
     # A repository/project URL is supporting evidence for the previous
     # project, not a new project title. This also handles old resume formats
     # that put the link on its own line.
-    if URL_RE.search(value) or PROJECT_LINK_LABEL_RE.search(value):
+    if URL_RE.search(value) or PROJECT_LINK_LABEL_RE.search(value) or value.lower().endswith(".git"):
         return False
-    if DATE_RANGE_RE.search(value):
+    # A date belongs to the title immediately before it. Treating it as a new
+    # entry splits every project into ``title``/``date``/``bullets`` fragments.
+    # A date can still seed a section when the source contains no title at all.
+    date_match = DATE_RANGE_RE.search(value)
+    if section == "项目" and date_match and value.strip() != date_match.group(0).strip():
         return True
-    if section == "教育" and any(token in value for token in ("大学", "学院", "学校", "本科", "硕士", "博士", "大专")):
+    if section == "教育" and any(token in value for token in ("大学", "学院", "学校")):
         return True
     if section == "经历" and any(token in value for token in ("公司", "研究院", "中心", "工程师", "实习生", "负责人")):
         return True
@@ -179,7 +183,10 @@ def _resume_entries(evidence: list[Evidence]) -> list[ResumeSourceEntry]:
             # Headings are copied into the final resume and therefore must be an
             # exact, citable fragment rather than a synthesized section label.
             heading = first
-            date = DATE_RANGE_RE.search(first)
+            date = next(
+                (match for item in group if (match := DATE_RANGE_RE.search(item.quote))),
+                None,
+            )
             organization = ""
             if kind in {"experience", "education"}:
                 organization = next((part.strip() for part in re.split(r"[|｜·]", first)
@@ -291,6 +298,11 @@ def sanitize_candidate_contact(contact: CandidateContact) -> CandidateContact:
     value = contact.model_copy(deep=True)
     if value.name.strip(" ：:").lower() in GENERIC_NAME_LABELS:
         value.name = ""
+    # Older OCR/contact extraction could mistake a repository URL for the
+    # location field. URLs belong to the cited project entry, never to the
+    # personal header or contact block.
+    if URL_RE.search(value.location):
+        value.location = ""
     return value
 
 

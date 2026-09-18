@@ -239,6 +239,7 @@ export interface ResumeEntry {
   heading: string
   subheading: string
   date_range: string
+  links?: string[]
   evidence_ids: string[]
   bullets: ResumeBullet[]
 }
@@ -277,6 +278,7 @@ export interface CandidateContact {
   phone: string
   email: string
   location: string
+  photo_path?: string
 }
 
 export interface ResumeDraftVersion {

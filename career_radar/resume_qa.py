@@ -8,6 +8,7 @@ evidence identifier leaked into the document.
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 from docx import Document
@@ -40,7 +41,7 @@ def _version_text(version: ResumeDraftVersion) -> str:
         values.append(section.title)
         values.extend(item.text for item in section.bullets)
         for entry in section.entries:
-            values.extend([entry.heading, entry.subheading, entry.date_range])
+            values.extend([entry.heading, entry.subheading, entry.date_range, *entry.links])
             values.extend(item.text for item in entry.bullets)
     return "\n".join(item for item in values if item)
 
@@ -56,11 +57,17 @@ def _supported_target_keywords(version: ResumeDraftVersion, target: TargetJob) -
 
 def _extract_pdf_text(path: Path) -> tuple[str, int, str]:
     """Return text, page count and extractor name, with a PyMuPDF fallback."""
+    def normalise(value: str) -> str:
+        # Chromium may expose CJK glyphs as Kangxi radicals in the PDF text
+        # map even though the page renders correctly. NFKC restores the
+        # searchable Chinese characters for ATS and evidence checks.
+        return unicodedata.normalize("NFKC", value)
+
     try:
         from pypdf import PdfReader
 
         reader = PdfReader(str(path))
-        text = "\f".join(page.extract_text() or "" for page in reader.pages)
+        text = normalise("\f".join(page.extract_text() or "" for page in reader.pages))
         if text.strip():
             return text, len(reader.pages), "pypdf"
         page_count = len(reader.pages)
@@ -71,7 +78,7 @@ def _extract_pdf_text(path: Path) -> tuple[str, int, str]:
 
         document = fitz.open(str(path))
         try:
-            text = "\f".join(page.get_text() or "" for page in document)
+            text = normalise("\f".join(page.get_text() or "" for page in document))
             return text, len(document), "pymupdf"
         finally:
             document.close()
@@ -82,6 +89,7 @@ def _extract_pdf_text(path: Path) -> tuple[str, int, str]:
 def _check_text_layer(text: str, version: ResumeDraftVersion, target: TargetJob,
                       page_count: int, extractor: str) -> list[ResumeQualityCheck]:
     checks: list[ResumeQualityCheck] = []
+    compact_text = re.sub(r"\s+", "", text).casefold()
     if not text.strip():
         # Some browser/PDF combinations render CJK visually but expose no text
         # layer. Keep the artifact downloadable for manual review while making
@@ -111,7 +119,8 @@ def _check_text_layer(text: str, version: ResumeDraftVersion, target: TargetJob,
         ))
     else:
         checks.append(_check("no_internal_ids", "PASS", "PDF 未发现内部证据 ID"))
-    missing_contact = [value for value in (version.contact.email, version.contact.phone) if value and value not in text]
+    missing_contact = [value for value in (version.contact.email, version.contact.phone)
+                       if value and value not in text]
     if missing_contact:
         checks.append(_check(
             "contact_text", "FAIL", "PDF 文本层缺少联系方式：" + "、".join(missing_contact),
@@ -120,7 +129,7 @@ def _check_text_layer(text: str, version: ResumeDraftVersion, target: TargetJob,
     else:
         checks.append(_check("contact_text", "PASS", "联系方式在 PDF 文本层中可读取"))
     missing_keywords = [keyword for keyword in _supported_target_keywords(version, target)
-                        if keyword.lower() not in text.lower()]
+                        if re.sub(r"\s+", "", keyword).casefold() not in compact_text]
     if missing_keywords:
         checks.append(_check(
             "pdf_core_keywords", "WARN", "PDF 文本层缺少部分岗位关键词：" + "、".join(missing_keywords[:5]),
@@ -130,7 +139,8 @@ def _check_text_layer(text: str, version: ResumeDraftVersion, target: TargetJob,
         checks.append(_check("pdf_core_keywords", "PASS", "岗位名称、公司和有证据的核心关键词可提取"))
     entry_headings = [entry.heading for section in version.sections for entry in section.entries
                       if entry.heading and entry.heading not in {"补充经历", "补充项目经历"}]
-    missing_entries = [heading for heading in entry_headings[:5] if heading.lower() not in text.lower()]
+    missing_entries = [heading for heading in entry_headings[:5]
+                       if re.sub(r"\s+", "", heading).casefold() not in compact_text]
     if missing_entries:
         checks.append(_check(
             "pdf_experience_text", "FAIL", "PDF 文本层缺少主要经历：" + "、".join(missing_entries),

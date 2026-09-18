@@ -906,6 +906,22 @@ class Database:
             )
         return version
 
+    def update_draft_version(self, version: ResumeDraftVersion) -> ResumeDraftVersion:
+        """Persist metadata-only repairs on an existing immutable draft row.
+
+        User edits still create a new version through ``save_draft_version``;
+        this narrow update is reserved for deterministic migrations such as
+        restoring OCR-split entry headings before export.
+        """
+        payload = version.model_dump()
+        payload["contact"] = {"profile_id": version.profile_id}
+        with self.connect() as db:
+            db.execute(
+                "UPDATE resume_draft_versions SET payload=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False), version.version_id),
+            )
+        return version
+
     def _draft_from_payload(self, payload: str) -> ResumeDraftVersion:
         version = ResumeDraftVersion.model_validate_json(payload)
         version.contact = self.get_contact(version.profile_id)

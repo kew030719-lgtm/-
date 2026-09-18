@@ -290,10 +290,15 @@ class AgentService:
                 bullets = [normalize_bullet(item, index) for index, item in enumerate(raw_entry.get("bullets") or [])]
                 if any(not set(item["evidence_ids"]).issubset(set(ids)) for item in bullets):
                     raise ValueError("模型把不同经历的事实合并到了同一条目")
+                links = []
+                for source_id in ids:
+                    for match in re.findall(r"https?://[^\s，。；;）)]+", evidence[source_id].quote):
+                        if match not in links:
+                            links.append(match.rstrip(".,，。；;"))
                 grouped.setdefault(source_entry.kind, []).append({
                     "entry_id": source_entry_id, "heading": source_entry.heading,
                     "subheading": " · ".join(filter(None, [source_entry.organization, source_entry.role])),
-                    "date_range": source_entry.date_range,
+                    "date_range": source_entry.date_range, "links": links,
                     "evidence_ids": ids, "bullets": bullets[:4],
                 })
             labels = {"experience": "工作经历", "project": "项目经历", "education": "教育经历",
