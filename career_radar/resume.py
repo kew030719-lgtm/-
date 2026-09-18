@@ -25,6 +25,21 @@ SKILLS = {
     "langchain": "LangChain", "pandas": "Pandas", "numpy": "NumPy",
     "javascript": "JavaScript", "typescript": "TypeScript", "vue": "Vue", "react": "React",
 }
+# Some Chinese skill labels are natural-language variants of the same verified
+# capability.  These aliases are only used when checking evidence; they do not
+# add a new skill to a candidate profile or allow unrelated evidence through.
+SKILL_EVIDENCE_ALIASES = {
+    "数据采集": ("数据采集", "数据抓取", "采集数据", "爬虫", "抓取"),
+    "爬虫": ("爬虫", "数据采集", "数据抓取", "采集数据", "抓取"),
+}
+
+
+def skill_is_grounded(token: str, evidence_text: str) -> bool:
+    normalized = evidence_text.lower()
+    aliases = SKILL_EVIDENCE_ALIASES.get(token, (token,))
+    return any(alias.lower() in normalized for alias in aliases)
+
+
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 GENERIC_NAME_LABELS = {

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from .agent_runtime import HybridAgentRuntime
 from .config import Settings
-from .resume import SKILLS, validate_citations
+from .resume import SKILLS, skill_is_grounded, validate_citations
 from .schemas import CandidateProfile, Comparison, JobScore, JobSnapshot, RoleRecommendation
 from .tools import ToolContext
 
@@ -257,10 +257,12 @@ class AgentService:
                 raw.get("content") or evidence[ids[0]].quote
             ).strip()
             cited_text = " ".join(evidence[item].quote for item in ids).lower()
-            claims = [token for token in SKILLS if token in text.lower() and token not in cited_text]
+            claims = [token for token in SKILLS
+                      if token in text.lower() and not skill_is_grounded(token, cited_text)]
             claims.extend(number for number in re.findall(r"\d+(?:\.\d+)?%?", text) if number not in cited_text)
             for claim in claims:
-                match = next((item for item in evidence.values() if claim.lower() in item.quote.lower()), None)
+                match = next((item for item in evidence.values()
+                              if skill_is_grounded(claim, item.quote)), None)
                 if match and match.block_id not in ids:
                     ids.append(match.block_id)
                     cited_text += " " + match.quote.lower()

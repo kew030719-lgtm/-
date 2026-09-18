@@ -18,6 +18,7 @@ from .database import Database, now_iso
 from .resume import (
     EMAIL_RE, PHONE_RE, SKILLS, ResumeError, ResumeGenerationError, extract_candidate_contact,
     sanitize_candidate_contact,
+    skill_is_grounded,
 )
 from .schemas import (
     CandidateContact, CandidateProfile, Evidence, JobSnapshot, ResumeBullet,
@@ -242,7 +243,7 @@ def validate_draft(version: ResumeDraftVersion, profile: CandidateProfile) -> No
             if entity not in quotes:
                 raise ResumeError(f"简历内容出现未经证实的机构：{entity}")
         for token, display in SKILLS.items():
-            if token in text.lower() and token not in quotes.lower():
+            if token in text.lower() and not skill_is_grounded(token, quotes):
                 raise ResumeError(f"简历内容出现未经证实的技能：{display}")
 
     for bullet in _all_bullets(version):

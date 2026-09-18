@@ -8,7 +8,7 @@ import pytest
 from docx import Document
 
 from career_radar.config import Settings
-from career_radar.resume import ResumeError, build_profile, extract_candidate_contact
+from career_radar.resume import ResumeError, build_profile, extract_candidate_contact, skill_is_grounded
 from career_radar.schemas import Evidence, JobSnapshot, ResumeBullet, ResumeDraftVersion, TailoringQuestion
 from career_radar.sites import FetchResult
 from career_radar.tailoring import (
@@ -292,6 +292,27 @@ def test_forged_generated_bullet_fails_validation(tmp_path):
     )
     with pytest.raises(ResumeError, match="未经证实的数字"):
         validate_draft(version, profile)
+
+
+def test_data_collection_label_is_grounded_by_crawler_evidence(tmp_path):
+    app = create_app(settings(tmp_path))
+    app.state.database.initialize()
+    profile = build_profile(
+        "张三\n项目经历\n股票信息爬虫项目\n我有过爬虫经验，写过股票信息数据爬虫。",
+        "profile_crawler_alias",
+    )
+    evidence = next(item for item in profile.evidence if "数据爬虫" in item.quote)
+    version = ResumeDraftVersion(
+        version_id="version_crawler_alias", draft_id="draft_crawler_alias", version=1,
+        tailoring_id="tailor_crawler_alias", profile_id=profile.profile_id,
+        target_job_id="target_crawler_alias", headline="数据工程师",
+        summary=[ResumeBullet(
+            bullet_id="bullet_crawler_alias", text="负责数据采集",
+            evidence_ids=[evidence.block_id], provenance="user_confirmed",
+        )], contact=extract_candidate_contact(profile), created_at=datetime.now(UTC).isoformat(),
+    )
+    validate_draft(version, profile)
+    assert skill_is_grounded("数据采集", evidence.quote)
 
 
 def test_generic_heading_is_not_used_as_name_and_template_notice_is_filtered():
