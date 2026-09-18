@@ -27,7 +27,7 @@ from .resume_qa import inspect_export
 from .schemas import (
     CandidateContact, CandidateProfile, Evidence, JobSnapshot, ResumeBullet,
     ResumeDraftVersion, ResumeEntry, ResumeExport, ResumeSection, ResumeSourceEntry, ResumeTailoring,
-    ResumeQualityCheck, SupplementalEvidence, TailoringQuestion, TargetJob,
+    ProjectUploadAnalysis, ResumeQualityCheck, SupplementalEvidence, TailoringQuestion, TargetJob,
 )
 from .sites.base import is_benefit_label
 
@@ -695,6 +695,45 @@ class TailoringService:
                 existing.add(evidence_id)
         self.database.save_profile(profile)
         return profile
+
+    def confirm_project_upload(self, upload_id: str) -> ProjectUploadAnalysis:
+        analysis = self.database.get_project_upload(upload_id)
+        if not analysis:
+            raise ResumeError("项目分析不存在或已过期")
+        tailoring = self.database.get_tailoring(analysis.tailoring_id)
+        profile = self.database.get_profile(analysis.profile_id)
+        if not tailoring or not profile or tailoring.profile_id != analysis.profile_id:
+            raise ResumeError("项目分析与当前候选人画像不匹配")
+        if analysis.status == "CONFIRMED":
+            return analysis
+        evidence_id = _stable_id("project-upload", f"{analysis.upload_id}:{analysis.evidence_quote}")
+        if not any(item.block_id == evidence_id for item in profile.evidence):
+            profile.evidence.append(Evidence(
+                source_type="resume", source_id=profile.profile_id, block_id=evidence_id,
+                quote=analysis.evidence_quote, section="项目", provenance="user_confirmed",
+            ))
+            profile.resume_entries.append(ResumeSourceEntry(
+                entry_id=f"source-entry-{evidence_id}", kind="project",
+                heading=analysis.project_name, evidence_ids=[evidence_id],
+                original_bullets=[analysis.evidence_quote],
+            ))
+            for technology in analysis.technologies:
+                if technology not in profile.skills:
+                    profile.skills.append(technology)
+            profile.confirmed = True
+            self.database.save_profile(profile)
+        analysis.status = "CONFIRMED"
+        analysis.confirmed_at = now_iso()
+        self.database.save_project_upload(analysis)
+        # A confirmed upload invalidates the previous draft task but preserves
+        # its draft_id, so the next confirmation creates a new version.
+        tailoring.task_id = None
+        tailoring.error = None
+        tailoring.status = "READY" if all(
+            item.status != "PENDING" for item in tailoring.questions
+        ) else "COLLECTING"
+        self.database.save_tailoring(tailoring)
+        return analysis
 
     async def generate(self, tailoring_id: str) -> ResumeDraftVersion:
         tailoring = self.database.get_tailoring(tailoring_id)

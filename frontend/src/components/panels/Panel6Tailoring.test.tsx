@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import Panel6Tailoring from './Panel6Tailoring'
-import type { JobSnapshot, TargetJob } from '../../types'
+import type { JobSnapshot, ResumeTailoring, TargetJob } from '../../types'
 
 const job: JobSnapshot = {
   snapshot_id: 'snapshot_1',
@@ -82,5 +82,26 @@ describe('Panel6Tailoring target selection', () => {
     expect(html).toContain('已读取数据库中的岗位详情，无需复制岗位链接')
     expect(html).toContain('改用数据库之外的岗位')
     expect(html).not.toContain('从已采集岗位中选择')
+  })
+
+  it('offers project upload analysis after a target is selected', () => {
+    const tailoring: ResumeTailoring = {
+      tailoring_id: 'tailor_1', profile_id: 'profile_1', target_job_id: 'target_1',
+      status: 'COLLECTING', questions: [], draft_id: null, error: null,
+    }
+    const html = renderToStaticMarkup(
+      <Panel6Tailoring
+        {...baseProps}
+        tailoring={tailoring}
+        onUploadProject={async () => {
+          throw new Error('not called during static render')
+        }}
+        onConfirmProjectUpload={async () => undefined}
+      />,
+    )
+
+    expect(html).toContain('用项目材料补充经历')
+    expect(html).toContain('确认后才会把它归入“项目经历”')
+    expect(html).toContain('分析项目')
   })
 })

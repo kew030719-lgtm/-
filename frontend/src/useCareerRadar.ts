@@ -21,6 +21,7 @@ import type {
   ResumeDraftBundle,
   ResumeDraftVersion,
   ResumeExport,
+  ProjectUploadAnalysis,
   ResumeTailoring,
   ResumeTemplate,
   TargetJob,
@@ -588,6 +589,47 @@ export function useCareerRadar() {
     [patch, pollTailoring, state.tailoring, toast],
   )
 
+  const uploadProject = useCallback(
+    async (file: File): Promise<ProjectUploadAnalysis> => {
+      const tailoring = state.tailoring
+      if (!tailoring) throw new Error('请先选择目标岗位')
+      const form = new FormData()
+      form.append('file', file)
+      const analysis = await api<ProjectUploadAnalysis>(
+        `/api/resume-tailorings/${tailoring.tailoring_id}/project-uploads`,
+        { method: 'POST', body: form },
+      )
+      toast('项目材料分析完成，请确认识别结果')
+      return analysis
+    },
+    [state.tailoring, toast],
+  )
+
+  const confirmProjectUpload = useCallback(
+    async (uploadId: string) => {
+      const tailoring = state.tailoring
+      if (!tailoring) return
+      try {
+        const confirmed = await post<{ analysis: ProjectUploadAnalysis; tailoring: ResumeTailoring }>(
+          `/api/resume-tailorings/${tailoring.tailoring_id}/project-uploads/${uploadId}/confirm`,
+        )
+        patch({ tailoring: confirmed.tailoring })
+        if (confirmed.tailoring.status !== 'READY') {
+          toast('项目已归入项目经历，请先回答或跳过剩余追问')
+          return
+        }
+        const queued = await post<{ task_id: string }>(
+          `/api/resume-tailorings/${tailoring.tailoring_id}/confirm`,
+        )
+        patch({ tailoring: confirmed.tailoring, tailoringBusy: true, draftBundle: null, draft: null })
+        void pollTailoring(queued.task_id, tailoring.tailoring_id)
+      } catch (error) {
+        toast((error as Error).message)
+      }
+    },
+    [patch, pollTailoring, state.tailoring, toast],
+  )
+
   const selectVersion = useCallback(
     (versionId: string) => {
       const bundle = state.draftBundle
@@ -1045,6 +1087,8 @@ export function useCareerRadar() {
       submitTargetForm,
       captureTargetUrl,
       submitTailoringAnswers,
+      uploadProject,
+      confirmProjectUpload,
       selectVersion,
       saveResumeVersion,
       exportResume,

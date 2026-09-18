@@ -226,6 +226,23 @@ export interface ResumeTailoring {
   error: string | null
 }
 
+export interface ProjectUploadAnalysis {
+  upload_id: string
+  profile_id: string
+  tailoring_id: string
+  filename: string
+  project_name: string
+  file_count: number
+  files: string[]
+  technologies: string[]
+  findings: string[]
+  project_urls: string[]
+  evidence_quote: string
+  status: 'PENDING' | 'CONFIRMED' | 'REJECTED'
+  created_at: string
+  confirmed_at: string | null
+}
+
 export interface ResumeBullet {
   bullet_id: string
   text: string

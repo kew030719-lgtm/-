@@ -7,6 +7,7 @@ import type {
   ResumeDraftBundle,
   ResumeDraftVersion,
   ResumeExport,
+  ProjectUploadAnalysis,
   ResumeTailoring,
   ResumeTemplate,
   TargetJob,
@@ -30,6 +31,8 @@ interface Props {
   onSubmitTarget: (fields: { company: string; title: string; content: string; url: string }) => Promise<void>
   onCaptureTarget: (url: string) => Promise<void>
   onSubmitAnswers: (answers: Record<string, string | null>) => Promise<void>
+  onUploadProject?: (file: File) => Promise<ProjectUploadAnalysis>
+  onConfirmProjectUpload?: (uploadId: string) => Promise<void>
   onSelectVersion: (versionId: string) => void
   onSetTemplate: (template: ResumeTemplate) => void
   onSaveVersion: (draft: ResumeDraftVersion) => Promise<void>
@@ -41,6 +44,7 @@ export default function Panel6Tailoring(props: Props) {
     active, jobs, targetJob, tailoring, tailoringBusy, tailorNotice, draftBundle, draft,
     resumeTemplate, exportLinks, exportError, resumeBusy,
     onToast, onSelectStoredJob, onSubmitTarget, onCaptureTarget, onSubmitAnswers,
+    onUploadProject, onConfirmProjectUpload,
     onSelectVersion, onSetTemplate, onSaveVersion, onExport,
   } = props
 
@@ -52,6 +56,9 @@ export default function Panel6Tailoring(props: Props) {
   const [skipped, setSkipped] = useState<Record<string, boolean>>({})
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [edited, setEdited] = useState<ResumeDraftVersion | null>(null)
+  const [projectFile, setProjectFile] = useState<File | null>(null)
+  const [projectAnalysis, setProjectAnalysis] = useState<ProjectUploadAnalysis | null>(null)
+  const [projectBusy, setProjectBusy] = useState(false)
 
   useEffect(() => {
     setEdited(draft ? (JSON.parse(JSON.stringify(draft)) as ResumeDraftVersion) : null)
@@ -73,6 +80,12 @@ export default function Panel6Tailoring(props: Props) {
     setSkipped(next)
     setAnswers(nextAnswers)
   }, [tailoring])
+
+  useEffect(() => {
+    setProjectFile(null)
+    setProjectAnalysis(null)
+    setProjectBusy(false)
+  }, [tailoring?.tailoring_id])
 
   const updateBullet = (bulletId: string, text: string) => {
     setEdited((current) => {
@@ -220,6 +233,72 @@ export default function Panel6Tailoring(props: Props) {
           </div>
         </form>
       </details>
+
+      {tailoring ? (
+        <section className="project-upload-card" aria-labelledby="project-upload-title">
+          <div className="section-intro">
+            <h3 id="project-upload-title">用项目材料补充经历（可选）</h3>
+            <p>
+              上传项目 ZIP、源码或 README。系统只在本地读取文件结构和文本，先展示分析结果；
+              你确认后才会把它归入“项目经历”并重新生成定制简历。
+            </p>
+          </div>
+          <div className="project-upload-actions">
+            <input
+              id="project-upload-file"
+              type="file"
+              accept=".zip,.py,.md,.txt,.json,.toml,.yaml,.yml,.sql"
+              onChange={(event) => {
+                setProjectFile(event.target.files?.[0] ?? null)
+                setProjectAnalysis(null)
+              }}
+            />
+            <button
+              className="secondary compact"
+              type="button"
+              disabled={!projectFile || projectBusy || !onUploadProject}
+              onClick={() => {
+                if (!projectFile || !onUploadProject) return
+                setProjectBusy(true)
+                void onUploadProject(projectFile)
+                  .then((analysis) => setProjectAnalysis(analysis))
+                  .catch((error) => onToast((error as Error).message))
+                  .finally(() => setProjectBusy(false))
+              }}
+            >
+              {projectBusy ? '正在分析…' : '分析项目'}
+            </button>
+          </div>
+          {projectAnalysis ? (
+            <div className="project-analysis" data-upload-id={projectAnalysis.upload_id}>
+              <b>{projectAnalysis.project_name}</b>
+              <p>已读取 {projectAnalysis.file_count} 个文件：{projectAnalysis.files.slice(0, 8).join('、')}</p>
+              <p>识别技术：{projectAnalysis.technologies.length ? projectAnalysis.technologies.join('、') : '未识别出明确技术栈'}</p>
+              {projectAnalysis.project_urls.length ? <p>项目地址：{projectAnalysis.project_urls.join('、')}</p> : null}
+              <ul>
+                {projectAnalysis.findings.map((finding) => <li key={finding}>{finding}</li>)}
+              </ul>
+              <small>{projectAnalysis.evidence_quote}</small>
+              <br />
+              <button
+                className="primary compact"
+                type="button"
+                disabled={projectBusy || projectAnalysis.status === 'CONFIRMED' || !onConfirmProjectUpload}
+                onClick={() => {
+                  if (!onConfirmProjectUpload) return
+                  setProjectBusy(true)
+                  void onConfirmProjectUpload(projectAnalysis.upload_id)
+                    .then(() => setProjectAnalysis({ ...projectAnalysis, status: 'CONFIRMED' }))
+                    .catch((error) => onToast((error as Error).message))
+                    .finally(() => setProjectBusy(false))
+                }}
+              >
+                {projectAnalysis.status === 'CONFIRMED' ? '已确认并重新生成' : '确认并更新定制简历'}
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <form
         id="tailoring-questions"

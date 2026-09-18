@@ -10,7 +10,8 @@ from typing import Any, Iterator
 from .schemas import (
     AgentMemory, Application, CandidateContact, CandidateProfile, ChatAction, ChatActionKind,
     ChatMessage, Comparison, Conversation, InterviewPrep, JobSnapshot, MemoryKind,
-    ResumeDraftVersion, ResumeExport, ResumeTailoring, SupplementalEvidence, TargetJob, TaskStatus,
+    ProjectUploadAnalysis, ResumeDraftVersion, ResumeExport, ResumeTailoring,
+    SupplementalEvidence, TargetJob, TaskStatus,
 )
 
 
@@ -142,6 +143,15 @@ class Database:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS supplemental_profile ON supplemental_evidence(profile_id, created_at);
+                CREATE TABLE IF NOT EXISTS project_uploads (
+                    id TEXT PRIMARY KEY,
+                    profile_id TEXT NOT NULL,
+                    tailoring_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS project_uploads_profile
+                    ON project_uploads(profile_id, created_at);
                 CREATE TABLE IF NOT EXISTS resume_tailorings (
                     id TEXT PRIMARY KEY,
                     profile_id TEXT NOT NULL,
@@ -353,7 +363,7 @@ class Database:
         tables = (
             "profiles", "tasks", "jobs", "job_snapshots", "comparisons", "conversations",
             "chat_messages", "chat_actions", "candidate_contacts", "target_jobs",
-            "supplemental_evidence", "resume_tailorings", "resume_draft_versions",
+            "supplemental_evidence", "project_uploads", "resume_tailorings", "resume_draft_versions",
             "resume_exports", "interview_preps", "applications", "agent_memories",
             "collection_metrics",
         )
@@ -365,7 +375,7 @@ class Database:
 
     def delete_all_data(self) -> None:
         tables = (
-            "chat_actions", "chat_messages", "conversations", "supplemental_evidence",
+            "chat_actions", "chat_messages", "conversations", "supplemental_evidence", "project_uploads",
             "resume_exports", "resume_draft_versions", "resume_tailorings", "interview_preps",
             "applications", "target_jobs", "comparisons", "agent_memories", "candidate_contacts",
             "job_snapshots", "jobs", "collection_metrics", "tasks", "profiles",
@@ -877,6 +887,32 @@ class Database:
                 (profile_id,),
             ).fetchall()
         return [SupplementalEvidence.model_validate_json(row["payload"]) for row in rows]
+
+    def save_project_upload(self, analysis: ProjectUploadAnalysis) -> ProjectUploadAnalysis:
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO project_uploads(id,profile_id,tailoring_id,payload,created_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (analysis.upload_id, analysis.profile_id, analysis.tailoring_id,
+                 analysis.model_dump_json(), analysis.created_at),
+            )
+        return analysis
+
+    def get_project_upload(self, upload_id: str) -> ProjectUploadAnalysis | None:
+        with self.connect() as db:
+            row = db.execute("SELECT payload FROM project_uploads WHERE id=?", (upload_id,)).fetchone()
+        return ProjectUploadAnalysis.model_validate_json(row["payload"]) if row else None
+
+    def list_project_uploads(self, profile_id: str, tailoring_id: str | None = None) -> list[ProjectUploadAnalysis]:
+        query = "SELECT payload FROM project_uploads WHERE profile_id=?"
+        args: list[str] = [profile_id]
+        if tailoring_id:
+            query += " AND tailoring_id=?"
+            args.append(tailoring_id)
+        query += " ORDER BY created_at DESC"
+        with self.connect() as db:
+            rows = db.execute(query, args).fetchall()
+        return [ProjectUploadAnalysis.model_validate_json(row["payload"]) for row in rows]
 
     def save_tailoring(self, tailoring: ResumeTailoring) -> ResumeTailoring:
         tailoring.updated_at = now_iso()

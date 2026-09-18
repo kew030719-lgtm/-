@@ -270,6 +270,25 @@ class SupplementalEvidence(BaseModel):
     created_at: str
 
 
+class ProjectUploadAnalysis(BaseModel):
+    """Static, user-confirmable analysis of an uploaded project archive."""
+
+    upload_id: str
+    profile_id: str
+    tailoring_id: str
+    filename: str
+    project_name: str
+    file_count: int = Field(ge=1)
+    files: list[str] = Field(default_factory=list)
+    technologies: list[str] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)
+    project_urls: list[str] = Field(default_factory=list)
+    evidence_quote: str
+    status: Literal["PENDING", "CONFIRMED", "REJECTED"] = "PENDING"
+    created_at: str
+    confirmed_at: str | None = None
+
+
 class TailoringQuestion(BaseModel):
     question_id: str
     question: str

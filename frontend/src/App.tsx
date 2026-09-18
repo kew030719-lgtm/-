@@ -132,6 +132,8 @@ export default function App() {
             onSubmitTarget={actions.submitTargetForm}
             onCaptureTarget={actions.captureTargetUrl}
             onSubmitAnswers={actions.submitTailoringAnswers}
+            onUploadProject={actions.uploadProject}
+            onConfirmProjectUpload={actions.confirmProjectUpload}
             onSelectVersion={actions.selectVersion}
             onSetTemplate={actions.setResumeTemplate}
             onSaveVersion={actions.saveResumeVersion}

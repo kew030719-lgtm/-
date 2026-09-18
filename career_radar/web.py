@@ -32,6 +32,7 @@ from .resume import (
     extract_candidate_contact,
     ScannedResumeError, extract_resume_text,
 )
+from .project_upload import ProjectUploadError, analyze_project_upload
 from .vision import VisionResumeReader
 from .schemas import (
     ChatActionKind,
@@ -897,6 +898,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def answer_tailoring_questions(tailoring_id: str, body: TailoringAnswers):
         try:
             return tailoring_service.save_answers(tailoring_id, body.answers)
+        except ResumeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/resume-tailorings/{tailoring_id}/project-uploads")
+    async def upload_tailoring_project(tailoring_id: str, request: Request):
+        tailoring = database.get_tailoring(tailoring_id)
+        if not tailoring:
+            raise HTTPException(404, "定向简历任务不存在")
+        form = await request.form()
+        upload = form.get("file") or form.get("project")
+        if upload is None or not hasattr(upload, "read") or not getattr(upload, "filename", ""):
+            raise HTTPException(422, "请选择项目 ZIP 压缩包或源码文件")
+        try:
+            data = await upload.read(10 * 1024 * 1024 + 1)
+            analysis = analyze_project_upload(
+                data, str(upload.filename), tailoring.profile_id, tailoring_id,
+            )
+            return database.save_project_upload(analysis)
+        except ProjectUploadError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/resume-tailorings/{tailoring_id}/project-uploads")
+    async def list_tailoring_projects(tailoring_id: str):
+        tailoring = database.get_tailoring(tailoring_id)
+        if not tailoring:
+            raise HTTPException(404, "定向简历任务不存在")
+        return {"uploads": database.list_project_uploads(tailoring.profile_id, tailoring_id)}
+
+    @app.post("/api/resume-tailorings/{tailoring_id}/project-uploads/{upload_id}/confirm")
+    async def confirm_tailoring_project(tailoring_id: str, upload_id: str):
+        analysis = database.get_project_upload(upload_id)
+        if not analysis or analysis.tailoring_id != tailoring_id:
+            raise HTTPException(404, "项目分析不存在")
+        try:
+            confirmed = tailoring_service.confirm_project_upload(upload_id)
+            return {"analysis": confirmed, "tailoring": database.get_tailoring(tailoring_id)}
         except ResumeError as exc:
             raise HTTPException(409, str(exc)) from exc
 
